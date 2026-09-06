@@ -215,8 +215,8 @@ def parse_bms_url(url: str) -> dict:
     if not event_code or not region_slug:
         raise ValueError("Invalid URL: missing event code (ET...) or city region.")
 
-    movie_name = movie_slug.replace("-", " ").title() if movie_slug else "Movie Watch"
-
+    movie_name = movie_slug.replace("-", " ").title() if movie_slug else "MovieWatch"
+    movie_name=movie_name.replace(" ","")
     return {
         "event_code": event_code,
         "region_slug": region_slug.lower(),
