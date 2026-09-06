@@ -932,6 +932,7 @@ def main():
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel_watch)],
+        allow_reentry=True,  # <--- CRITICAL FIX: Allows /start or URL entry while in an active state
     )
 
     app.add_handler(conv_handler)
