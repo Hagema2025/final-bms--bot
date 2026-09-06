@@ -48,6 +48,8 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_WATCHES_PATH = os.getenv("GITHUB_WATCHES_PATH")
+GITHUB_STATE_PATH = os.getenv("GITHUB_STATE_PATH")
+
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
 
 THEATRES_PER_PAGE = 6
@@ -698,12 +700,12 @@ async def handle_time_toggle_and_save(update: Update, context: ContextTypes.DEFA
 
     # Define Indian Standard Time (IST: UTC+5:30)
     IST = timezone(timedelta(hours=5, minutes=30))
-    current_time_str = datetime.now(IST).strftime("%Y%m%d||%H%M%S")
+    current_time_str = datetime.now(IST).strftime("%Y%m%d%H%M%S")
 
     if data in ("save_watch", "next_time"):
         log.info("Saving watch entry to file...")
         new_watch_entry = {
-            "name": watch["name"]+current_time_str,
+            "name": watch["name"]+"_"+current_time_str,
             "url": watch["url"],
             "dates": sorted(list(watch["dates"])),
             "theatre": sorted(list(watch["theatre"])),
@@ -817,7 +819,33 @@ async def stop_watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     
     save_watches(updated_watches)
-    await update.message.reply_text(f"✅ Successfully stopped and removed watch: `{' '.join(context.args)}`", parse_mode=ParseMode.MARKDOWN)
+
+    # 2. Update data/bms_state.json
+    try:
+        # Helper functions to interact with bms_state.json on GitHub
+        # Adapt these helper names to match your script's GitHub load/save functions
+        bms_state, sha = _github_get_file(GITHUB_STATE_PATH)
+        
+        if bms_state and isinstance(bms_state, dict):
+            keys_to_delete = [
+                key for key in bms_state.keys()
+                if key.lower()==target_name
+            ]
+            
+            if keys_to_delete:
+                for key in keys_to_delete:
+                    del bms_state[key]
+                
+                _github_put_file(GITHUB_STATE_PATH, bms_state, sha)
+                log.info(f"Removed {len(keys_to_delete)} state entry/entries from bms_state.json: {keys_to_delete}")
+    except Exception as e:
+        log.error(f"Failed to clear bms_state.json for : {e}")
+
+    # 3. Confirm to user
+    await update.message.reply_text(
+        f"✅ Successfully stopped watch and cleared cached state for: `{' '.join(context.args)}`",
+        parse_mode=ParseMode.MARKDOWN,
+    )
     log.info(f"Watch stopped/removed by user {update.effective_user.id}: {' '.join(context.args)}")
 
 
@@ -919,5 +947,4 @@ def main():
 
 if __name__ == "__main__":
     start_health_server()
-
     main()
