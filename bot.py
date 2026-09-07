@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from threading import Thread
 from urllib.parse import urlparse
 from dotenv import load_dotenv
-
+from telegram.helpers import escape_markdown
 load_dotenv()  # Loads variables from your local .env file
 
 import requests
@@ -711,7 +711,6 @@ async def receive_custom_date(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     return STATE_DATE
 
-
 async def handle_time_toggle_and_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -727,7 +726,7 @@ async def handle_time_toggle_and_save(update: Update, context: ContextTypes.DEFA
     if data in ("save_watch", "next_time"):
         log.info("Saving watch entry to file...")
         new_watch_entry = {
-            "name": watch["name"]+"_"+current_time_str,
+            "name": watch["name"] + "_" + current_time_str,
             "url": watch["url"],
             "dates": sorted(list(watch["dates"])),
             "theatre": sorted(list(watch["theatre"])),
@@ -739,25 +738,31 @@ async def handle_time_toggle_and_save(update: Update, context: ContextTypes.DEFA
 
         append_to_watches_file(new_watch_entry)
 
-        langs_str = ", ".join(new_watch_entry["languages"]) or "ALL"
-        formats_str = ", ".join(new_watch_entry["formats"]) or "ALL"
-        dates_str = ", ".join(new_watch_entry["dates"])
-        times_str = ", ".join(new_watch_entry["time_period"]) or "ALL"
+        # 1. Prepare raw variables
+        raw_name = new_watch_entry['name']
+        raw_langs = ", ".join(new_watch_entry["languages"]) or "ALL"
+        raw_formats = ", ".join(new_watch_entry["formats"]) or "ALL"
+        raw_dates = ", ".join(new_watch_entry["dates"])
+        raw_times = ", ".join(new_watch_entry["time_period"]) or "ALL"
         theatre_count = len(new_watch_entry["theatre"])
-        theatres_str = f"{theatre_count} selected" if theatre_count > 0 else "ALL"
+        raw_theatres = f"{theatre_count} selected" if theatre_count > 0 else "ALL"
+        raw_github_path = GITHUB_WATCHES_PATH
+
+        # 2. Escape variables for MARKDOWN_V2 (version 2)
+        esc = lambda text: escape_markdown(str(text), version=2)
 
         summary = (
-            "🎉 *Watch Created Successfully!*\n\n"
-            f"🎬 *Movie:* {new_watch_entry['name']}\n"
-            f"🌐 *Languages:* {langs_str}\n"
-            f"📦 *Formats:* {formats_str}\n"
-            f"🏛️ *Theatres:* {theatres_str}\n"
-            f"📅 *Dates:* {dates_str}\n"
-            f"⏰ *Times:* {times_str}\n\n"
-            f"📁 Saved directly to `{GITHUB_WATCHES_PATH}`. Your checker will monitor this on its next run."
+            "🎉 *Watch Created Successfully\\!*\n\n"
+            f"🎬 *Movie:* {esc(raw_name)}\n"
+            f"🌐 *Languages:* {esc(raw_langs)}\n"
+            f"📦 *Formats:* {esc(raw_formats)}\n"
+            f"🏛️ *Theatres:* {esc(raw_theatres)}\n"
+            f"📅 *Dates:* {esc(raw_dates)}\n"
+            f"⏰ *Times:* {esc(raw_times)}\n\n"
+            f"📁 Saved directly to `{esc(raw_github_path)}`\\. Your checker will monitor this on its next run\\."
         )
 
-        await query.edit_message_text(summary, parse_mode=ParseMode.MARKDOWN)
+        await query.edit_message_text(summary, parse_mode=ParseMode.MARKDOWN_V2)
         context.user_data.clear()
         return ConversationHandler.END
 
@@ -769,9 +774,12 @@ async def handle_time_toggle_and_save(update: Update, context: ContextTypes.DEFA
             date_options, watch["dates"], "date", 2, 
             allow_custom_date=True, require_selection=True, exclude_any=True
         )
+        
+        # Escape dynamic watch name for Step 4 back navigation
+        escaped_watch_name = escape_markdown(watch['name'], version=2)
         await query.edit_message_text(
-            f"🎬 *{watch['name']}*\n\n📌 *Step 4: Select Dates*",
-            reply_markup=kb, parse_mode=ParseMode.MARKDOWN
+            f"🎬 *{escaped_watch_name}*\n\n📌 *Step 4: Select Dates*",
+            reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2
         )
         return STATE_DATE
 
@@ -851,7 +859,7 @@ async def stop_watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if bms_state and isinstance(bms_state, dict):
             keys_to_delete = [
                 key for key in bms_state.keys()
-                if key.lower()==target_name
+                if key.lower().startswith(target_name)
             ]
             
             if keys_to_delete:
