@@ -66,6 +66,13 @@ THEATRES_PER_PAGE = 6
 ) = range(7)
 
 
+# Parse comma-separated IDs into sets of integers
+def parse_id_list(env_var: str) -> set[int]:
+    raw = os.getenv(env_var, "")
+    return {int(x.strip()) for x in raw.split(",") if x.strip().isdigit()}
+
+ALLOWED_USERS = parse_id_list("ALLOWED_USERS")
+
 # ============================================================
 # GITHUB JSON STORAGE
 # ============================================================
@@ -108,6 +115,21 @@ def save_watches(watches: list):
     )
     log.info("WATCHES SAVED | count=%d", len(watches))
 
+async def is_authorized(update: Update) -> bool:
+    """Verifies if the incoming user ID is in ALLOWED_USERS."""
+    user = update.effective_user
+    if not user or user.id not in ALLOWED_USERS:
+        user_id = user.id if user else "Unknown"
+        user_name = user.full_name if user else "Unknown"
+        
+        log.warning(f"⛔ Unauthorized access attempt | ID: {user_id} ---> Name: {user_name}")
+
+        # Optional: Send callback feedback to prevent Telegram UI freeze
+        if update.callback_query:
+            await update.callback_query.answer("⛔ Access Denied", show_alert=True)
+            
+        return False
+    return True
 
 # RENDER HEALTH SERVER
 # ============================================================
@@ -889,7 +911,7 @@ async def inspect_watch_command(update: Update, context: ContextTypes.DEFAULT_TY
 # ======================================================================
 # BOT RUNNER
 # ======================================================================
-
+auth_filter = filters.User(user_id=list(ALLOWED_USERS)) if ALLOWED_USERS else filters.ALL
 def main():
     if BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE" or not BOT_TOKEN:
         print("❌ Error: Set the TELEGRAM_BOT_TOKEN environment variable first.")
@@ -899,8 +921,8 @@ def main():
 
     conv_handler = ConversationHandler(
         entry_points=[
-            CommandHandler("newwatch", start_command),
-            CommandHandler("start", start_command),
+            CommandHandler("newwatch", start_command,filters=auth_filter),
+            CommandHandler("start", start_command,filters=auth_filter),
             MessageHandler(filters.Regex(r"bookmyshow\.com"), receive_url),
         ],
         states={
@@ -931,16 +953,16 @@ def main():
                 CallbackQueryHandler(handle_time_toggle_and_save),
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel_watch)],
+        fallbacks=[CommandHandler("cancel", cancel_watch,filters=auth_filter)],
         allow_reentry=True,  # <--- CRITICAL FIX: Allows /start or URL entry while in an active state
     )
 
     app.add_handler(conv_handler)
     
     # Register the requested standalone handlers
-    app.add_handler(CommandHandler("watches", list_watches_command))
-    app.add_handler(CommandHandler("stop", stop_watch_command))
-    app.add_handler(CommandHandler("inspect", inspect_watch_command))
+    app.add_handler(CommandHandler("watches", list_watches_command,filters=auth_filter))
+    app.add_handler(CommandHandler("stop", stop_watch_command,filters=auth_filter))
+    app.add_handler(CommandHandler("inspect", inspect_watch_command,filters=auth_filter))
 
     print("🤖 Telegram Watch Builder Bot is running...")
     app.run_polling()
