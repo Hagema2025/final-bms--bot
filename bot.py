@@ -49,7 +49,7 @@ GITHUB_REPO = os.getenv("GITHUB_REPO")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_WATCHES_PATH = os.getenv("GITHUB_WATCHES_PATH")
 GITHUB_STATE_PATH = os.getenv("GITHUB_STATE_PATH")
-
+GROUP_CHAT_ID = os.getenv("GROUP_CHAT_ID")
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
 
 THEATRES_PER_PAGE = 6
@@ -724,9 +724,61 @@ async def handle_time_toggle_and_save(update: Update, context: ContextTypes.DEFA
     current_time_str = datetime.now(IST).strftime("%Y%m%d%H%M%S")
 
     if data in ("save_watch", "next_time"):
-        log.info("Saving watch entry to file...")
+        log.info("Saving watch entry to file and creating group topic...")
+        watch_name = watch["name"] + "_" + current_time_str
+        
+        # 1. Prepare raw variables for the summary
+        raw_langs = ", ".join(sorted(list(watch["languages"]))) or "ALL"
+        raw_formats = ", ".join(sorted(list(watch["formats"]))) or "ALL"
+        raw_dates = ", ".join(sorted(list(watch["dates"])))
+        raw_times = ", ".join(sorted(list(watch["time_period"]))) or "ALL"
+        theatre_count = len(watch["theatre"])
+        raw_theatres = f"{theatre_count} selected" if theatre_count > 0 else "ALL"
+
+        # 2. Escape variables for MARKDOWN_V2
+        esc = lambda text: escape_markdown(str(text), version=2)
+
+        summary = (
+            "🎉 *Watch Configuration Summary*\n\n"
+            f"🎬 *Movie:* {esc(watch_name)}\n"
+            f"🌐 *Languages:* {esc(raw_langs)}\n"
+            f"📦 *Formats:* {esc(raw_formats)}\n"
+            f"🏛️ *Theatres:* {esc(raw_theatres)}\n"
+            f"📅 *Dates:* {esc(raw_dates)}\n"
+            f"⏰ *Times:* {esc(raw_times)}\n\n"
+            "🔔 _Automated alerts for this watch will appear in this topic\\._"
+        )
+
+        # 3. Create a Forum Topic, send the summary, and pin it
+        thread_id = None
+        if GROUP_CHAT_ID:
+            try:
+                # Create the topic
+                topic = await context.bot.create_forum_topic(
+                    chat_id=GROUP_CHAT_ID, 
+                    name=watch["name"][:128] # Telegram limits topic names to 128 chars
+                )
+                thread_id = topic.message_thread_id
+                
+                # Send the summary directly into the new topic
+                topic_msg = await context.bot.send_message(
+                    chat_id=GROUP_CHAT_ID,
+                    message_thread_id=thread_id,
+                    text=summary,
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
+                
+                # Pin the summary message inside the topic
+                await context.bot.pin_chat_message(
+                    chat_id=GROUP_CHAT_ID,
+                    message_id=topic_msg.message_id
+                )
+            except Exception as e:
+                log.error(f"Failed to create topic or pin message: {e}")
+
+        # 4. Save to GitHub with the thread_id
         new_watch_entry = {
-            "name": watch["name"] + "_" + current_time_str,
+            "name": watch_name,
             "url": watch["url"],
             "dates": sorted(list(watch["dates"])),
             "theatre": sorted(list(watch["theatre"])),
@@ -734,35 +786,15 @@ async def handle_time_toggle_and_save(update: Update, context: ContextTypes.DEFA
             "discover_variants": True,
             "languages": sorted(list(watch["languages"])),
             "formats": sorted(list(watch["formats"])),
+            "message_thread_id": thread_id, 
         }
 
         append_to_watches_file(new_watch_entry)
 
-        # 1. Prepare raw variables
-        raw_name = new_watch_entry['name']
-        raw_langs = ", ".join(new_watch_entry["languages"]) or "ALL"
-        raw_formats = ", ".join(new_watch_entry["formats"]) or "ALL"
-        raw_dates = ", ".join(new_watch_entry["dates"])
-        raw_times = ", ".join(new_watch_entry["time_period"]) or "ALL"
-        theatre_count = len(new_watch_entry["theatre"])
-        raw_theatres = f"{theatre_count} selected" if theatre_count > 0 else "ALL"
-        raw_github_path = GITHUB_WATCHES_PATH
-
-        # 2. Escape variables for MARKDOWN_V2 (version 2)
-        esc = lambda text: escape_markdown(str(text), version=2)
-
-        summary = (
-            "🎉 *Watch Created Successfully\\!*\n\n"
-            f"🎬 *Movie:* {esc(raw_name)}\n"
-            f"🌐 *Languages:* {esc(raw_langs)}\n"
-            f"📦 *Formats:* {esc(raw_formats)}\n"
-            f"🏛️ *Theatres:* {esc(raw_theatres)}\n"
-            f"📅 *Dates:* {esc(raw_dates)}\n"
-            f"⏰ *Times:* {esc(raw_times)}\n\n"
-            f"📁 Saved directly to `{esc(raw_github_path)}`\\. Your checker will monitor this on its next run\\."
-        )
-
-        await query.edit_message_text(summary, parse_mode=ParseMode.MARKDOWN_V2)
+        # 5. Confirm to the user in their current chat menu
+        dm_confirmation = summary + f"\n\n✅ *Setup Complete\\!* A dedicated topic has been created in the group\\."
+        await query.edit_message_text(dm_confirmation, parse_mode=ParseMode.MARKDOWN_V2)
+        
         context.user_data.clear()
         return ConversationHandler.END
 
@@ -774,8 +806,6 @@ async def handle_time_toggle_and_save(update: Update, context: ContextTypes.DEFA
             date_options, watch["dates"], "date", 2, 
             allow_custom_date=True, require_selection=True, exclude_any=True
         )
-        
-        # Escape dynamic watch name for Step 4 back navigation
         escaped_watch_name = escape_markdown(watch['name'], version=2)
         await query.edit_message_text(
             f"🎬 *{escaped_watch_name}*\n\n📌 *Step 4: Select Dates*",
@@ -801,7 +831,6 @@ async def handle_time_toggle_and_save(update: Update, context: ContextTypes.DEFA
     )
     await safe_edit_reply_markup(query, reply_markup=kb)
     return STATE_TIME
-
 
 async def cancel_watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     log.info("Setup workflow cancelled.")
@@ -835,49 +864,69 @@ async def list_watches_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def stop_watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("⚠️ Please specify the watch name to stop. Example:\n`/stop Immortal`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text("⚠️ Please specify the watch name to stop. Example:\n`/stop Mandaadi`", parse_mode=ParseMode.MARKDOWN)
         return
     
-    target_name = " ".join(context.args).strip().lower()
+    target_name_input = " ".join(context.args).strip().lower()
     watches = load_watches()
     
-    initial_count = len(watches)
-    updated_watches = [w for w in watches if w.get("name", "").strip().lower() != target_name]
+    # 1. Flexible Matching: Find the watch even if user didn't type the timestamp
+    matched_watch = None
+    for w in watches:
+        watch_name_lower = w.get("name", "").strip().lower()
+        # Match exact name OR match the base name before the timestamp
+        if watch_name_lower == target_name_input:
+            matched_watch = w
+            break
     
-    if len(updated_watches) == initial_count:
-        await update.message.reply_text(f"❌ No watch found matching name: `{' '.join(context.args)}`", parse_mode=ParseMode.MARKDOWN)
+    if not matched_watch:
+        await update.message.reply_text(f"❌ No watch found matching: `{' '.join(context.args)}`", parse_mode=ParseMode.MARKDOWN)
         return
-    
+
+    exact_watch_name = matched_watch.get("name")
+
+    # 2. Delete the Telegram Topic
+    thread_id = matched_watch.get("message_thread_id")
+    if thread_id and GROUP_CHAT_ID:
+        try:
+            await context.bot.delete_forum_topic(chat_id=GROUP_CHAT_ID, message_thread_id=thread_id)
+            log.info(f"Deleted forum topic {thread_id} for {exact_watch_name}")
+        except Exception as e:
+            log.error(f"Failed to delete forum topic: {e}")
+
+    # 3. Remove from GitHub Watches
+    updated_watches = [w for w in watches if w.get("name") != exact_watch_name]
     save_watches(updated_watches)
 
-    # 2. Update data/bms_state.json
+    # 4. Update bms_state.json (Clears Base + ALL discovered variants)
+    deleted_count = 0
     try:
-        # Helper functions to interact with bms_state.json on GitHub
-        # Adapt these helper names to match your script's GitHub load/save functions
         bms_state, sha = _github_get_file(GITHUB_STATE_PATH)
         
         if bms_state and isinstance(bms_state, dict):
+            # This looks for keys like "Mandaadi_20260908173925" AND "Mandaadi_20260908173925 (Tamil EPIQ)"
             keys_to_delete = [
                 key for key in bms_state.keys()
-                if key.lower().startswith(target_name)
+                if key.lower().startswith(exact_watch_name.lower())
             ]
             
             if keys_to_delete:
                 for key in keys_to_delete:
                     del bms_state[key]
                 
-                _github_put_file(GITHUB_STATE_PATH, bms_state, sha)
-                log.info(f"Removed {len(keys_to_delete)} state entry/entries from bms_state.json: {keys_to_delete}")
+                _github_put_file(GITHUB_STATE_PATH, bms_state, f"Cleared {len(keys_to_delete)} states for {exact_watch_name}")
+                deleted_count = len(keys_to_delete)
+                log.info(f"Removed {deleted_count} state entries: {keys_to_delete}")
     except Exception as e:
-        log.error(f"Failed to clear bms_state.json for : {e}")
+        log.error(f"Failed to clear bms_state.json: {e}")
 
-    # 3. Confirm to user
+    # 5. Confirm to user
     await update.message.reply_text(
-        f"✅ Successfully stopped watch and cleared cached state for: `{' '.join(context.args)}`",
+        f"✅ Successfully stopped watch!\n"
+        f"🗑️ Deleted Topic for: `{exact_watch_name}`\n"
+        f"🧹 Cleared `{deleted_count}` state variant(s) from cache.",
         parse_mode=ParseMode.MARKDOWN,
     )
-    log.info(f"Watch stopped/removed by user {update.effective_user.id}: {' '.join(context.args)}")
-
 
 async def inspect_watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
