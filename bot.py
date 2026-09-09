@@ -756,7 +756,7 @@ async def handle_time_toggle_and_save(update: Update, context: ContextTypes.DEFA
                 # Create the topic
                 topic = await context.bot.create_forum_topic(
                     chat_id=GROUP_CHAT_ID, 
-                    name=watch["name"][:128] # Telegram limits topic names to 128 chars
+                    name=watch_name[:128] # Telegram limits topic names to 128 chars
                 )
                 thread_id = topic.message_thread_id
                 
