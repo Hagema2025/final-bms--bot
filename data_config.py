@@ -100,6 +100,7 @@ class Formats:
 # 5. TIME PERIODS
 # ---------------------------------------------------------
 class TimePeriods:
+    MIDNIGHT = "midnight"
     MORNING = "morning"
     AFTERNOON = "afternoon"
     EVENING = "evening"
@@ -107,4 +108,10 @@ class TimePeriods:
 
     @classmethod
     def get_all(cls):
-        return [cls.MORNING, cls.AFTERNOON, cls.EVENING, cls.NIGHT]
+        return [
+            (cls.MIDNIGHT, "🌙 Midnight (12 AM - 6 AM)"),
+            (cls.MORNING, "🌅 Morning (6 AM - 12 PM)"),
+            (cls.AFTERNOON, "☀️ Afternoon (12 PM - 4 PM)"),
+            (cls.EVENING, "🌆 Evening (4 PM - 7 PM)"),
+            (cls.NIGHT, "🌃 Night (7 PM - 12 AM)"),
+        ]
