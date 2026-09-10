@@ -817,11 +817,17 @@ async def handle_time_toggle_and_save(update: Update, context: ContextTypes.DEFA
         watch["time_period"].clear()
     elif data.startswith("tgl_"):
         idx = int(data.split("_")[1])
-        item = options[idx]
-        if item in watch["time_period"]:
-            watch["time_period"].remove(item)
+        
+        # Grab the raw option from the list
+        raw_option = options[idx]
+        
+        # Extract JUST the string (e.g., "morning") if it's a tuple
+        time_key = raw_option[0] if isinstance(raw_option, tuple) else raw_option
+        
+        if time_key in watch["time_period"]:
+            watch["time_period"].remove(time_key)
         else:
-            watch["time_period"].add(item)
+            watch["time_period"].add(time_key)
 
     kb = build_multiselect_keyboard(
         options=options,
