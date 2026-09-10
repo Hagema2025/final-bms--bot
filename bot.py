@@ -53,6 +53,7 @@ GROUP_CHAT_ID = os.getenv("GROUP_CHAT_ID")
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
 
 THEATRES_PER_PAGE = 6
+WATCHES_PER_PAGE = 3  # 3 to 4 is ideal so full names fit comfortably on mobile
 WATCHES_CACHE = None  # <--- ADD THIS
 
 # Conversation States
@@ -146,6 +147,51 @@ async def is_authorized(update: Update) -> bool:
             
         return False
     return True
+
+
+def build_watches_view(watches: list, page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
+    if not watches:
+        return "📭 No active watches found.", None
+
+    total_pages = max(1, (len(watches) + WATCHES_PER_PAGE - 1) // WATCHES_PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
+
+    start_idx = page * WATCHES_PER_PAGE
+    end_idx = start_idx + WATCHES_PER_PAGE
+    page_watches = watches[start_idx:end_idx]
+
+    # 1. Build the text display with full, unclipped names
+    lines = [f"📋 *Active Watches* (Page {page + 1}/{total_pages}):\n"]
+    keyboard = []
+
+    for offset, w in enumerate(page_watches):
+        global_idx = start_idx + offset
+        display_num = global_idx + 1
+        full_name = w.get("name", f"Watch_{global_idx}")
+
+        # Full name displayed in the message bubble
+        lines.append(f"*{display_num}.* `{full_name}`")
+
+        # Compact numbered action buttons
+        keyboard.append([
+            InlineKeyboardButton(f"🔍 Inspect {display_num}", callback_data=f"insp_{global_idx}"),
+            InlineKeyboardButton(f"❌ Stop {display_num}", callback_data=f"stop_{global_idx}")
+        ])
+
+    # 2. Add pagination navigation row if there are multiple pages
+    if total_pages > 1:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"wpage_{page - 1}"))
+        
+        nav_row.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="noop"))
+        
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"wpage_{page + 1}"))
+            
+        keyboard.append(nav_row)
+
+    return "\n".join(lines), InlineKeyboardMarkup(keyboard)
 
 # RENDER HEALTH SERVER
 # ============================================================
@@ -870,52 +916,45 @@ async def cancel_watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ======================================================================
 
 async def list_watches_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    log.info(f"User {update.effective_user.id} requested watch list.")
+    log.info(f"User {update.effective_user.id} requested paginated watch list.")
     watches = load_watches()
 
-
-    if not watches:
-        await update.message.reply_text("📭 No active watches found.")
-        return
-
-    keyboard = []
-    
-    for idx, w in enumerate(watches):
-        name = w.get("name", f"Watch_{idx}")
-        # Build a row for each watch: [🔍 Name] [❌]
-        row = [
-            InlineKeyboardButton(f"🔍 {name[:30]}", callback_data=f"insp_{idx}"),
-            InlineKeyboardButton("❌", callback_data=f"stop_{idx}")
-        ]
-        keyboard.append(row)
-        
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    text, reply_markup = build_watches_view(watches, page=0)
     await update.message.reply_text(
-        "📋 *Active Watches:*\n_Click 🔍 to inspect or ❌ to stop._", 
+        text,
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN
     )
 
 async def handle_watch_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # --- ADD THIS SECURITY CHECK FIRST ---
+    if not await is_authorized(update):
+        return
     query = update.callback_query
     await query.answer()
     data = query.data
     watches = load_watches()
-    
-    # --- 1. INSPECT WATCH ---
-    if data.startswith("insp_"):
+
+    # --- 1. HANDLE PAGE FLIP ---
+    if data.startswith("wpage_"):
+        page_num = int(data.split("_")[1])
+        text, reply_markup = build_watches_view(watches, page=page_num)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+
+    # --- 2. INSPECT WATCH ---
+    elif data.startswith("insp_"):
         idx = int(data.split("_")[1])
         if idx >= len(watches):
             await query.edit_message_text("⚠️ Watch not found. The list might have changed.")
             return
-            
+
         matched = watches[idx]
         langs_str = ", ".join(matched.get("languages", [])) or "ALL"
         formats_str = ", ".join(matched.get("formats", [])) or "ALL"
         dates_str = ", ".join(matched.get("dates", []))
         times_str = ", ".join(matched.get("time_period", [])) or "ALL"
         theatres_str = f"{len(matched.get('theatre', []))} selected" if matched.get("theatre") else "ALL"
-        
+
         details = (
             f"🔍 *Watch Details: {escape_markdown(matched.get('name', ''), version=2)}*\n\n"
             f"🔗 *URL:* {escape_markdown(matched.get('url', ''), version=2)}\n"
@@ -925,15 +964,16 @@ async def handle_watch_actions(update: Update, context: ContextTypes.DEFAULT_TYP
             f"📅 *Dates:* {escape_markdown(dates_str, version=2)}\n"
             f"⏰ *Times:* {escape_markdown(times_str, version=2)}"
         )
-        
+
         kb = [[InlineKeyboardButton("⬅️ Back to List", callback_data="back_to_list")]]
         await query.edit_message_text(details, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN_V2)
 
-    # --- 2. INTENT TO STOP ---
+    # --- 3. INTENT TO STOP ---
     elif data.startswith("stop_"):
         idx = int(data.split("_")[1])
-        if idx >= len(watches): return
-            
+        if idx >= len(watches):
+            return
+
         exact_watch_name = watches[idx].get("name")
         kb = [
             [
@@ -943,17 +983,19 @@ async def handle_watch_actions(update: Update, context: ContextTypes.DEFAULT_TYP
         ]
         await query.edit_message_text(
             f"⚠️ *Are you sure you want to stop tracking:*\n`{escape_markdown(exact_watch_name, version=2)}`?",
-            reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN_V2
+            reply_markup=InlineKeyboardMarkup(kb),
+            parse_mode=ParseMode.MARKDOWN_V2
         )
 
-    # --- 3. CONFIRM STOP (DESTRUCTIVE) ---
+    # --- 4. CONFIRM STOP ---
     elif data.startswith("confirmstop_"):
         idx = int(data.split("_")[1])
-        if idx >= len(watches): return
-            
+        if idx >= len(watches):
+            return
+
         matched = watches[idx]
         exact_watch_name = matched.get("name")
-        
+
         # Delete Topic
         thread_id = matched.get("message_thread_id")
         if thread_id and GROUP_CHAT_ID:
@@ -962,18 +1004,19 @@ async def handle_watch_actions(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception as e:
                 log.error(f"Failed to delete forum topic: {e}")
 
-        # Remove from GitHub Watches
+        # Update GitHub Watches & Cache
         updated_watches = [w for i, w in enumerate(watches) if i != idx]
         save_watches(updated_watches)
 
-        # Clear State cache
+        # Clear State Cache
         deleted_count = 0
         try:
             bms_state, sha = _github_get_file(GITHUB_STATE_PATH)
             if bms_state and isinstance(bms_state, dict):
                 keys_to_delete = [k for k in bms_state.keys() if k.lower().startswith(exact_watch_name.lower())]
                 if keys_to_delete:
-                    for k in keys_to_delete: del bms_state[k]
+                    for k in keys_to_delete:
+                        del bms_state[k]
                     _github_put_file(GITHUB_STATE_PATH, bms_state, f"Cleared states for {exact_watch_name}")
                     deleted_count = len(keys_to_delete)
         except Exception as e:
@@ -984,130 +1027,15 @@ async def handle_watch_actions(update: Update, context: ContextTypes.DEFAULT_TYP
             f"✅ *Successfully stopped watch\\!*\n"
             f"🗑️ Deleted Topic for: `{escape_markdown(exact_watch_name, version=2)}`\n"
             f"🧹 Cleared `{deleted_count}` state variant\\(s\\)\\.",
-            reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN_V2
+            reply_markup=InlineKeyboardMarkup(kb),
+            parse_mode=ParseMode.MARKDOWN_V2
         )
 
-    # --- 4. NAVIGATE BACK ---
+    # --- 5. NAVIGATE BACK TO LIST ---
     elif data == "back_to_list":
-        watches = load_watches()
-        if not watches:
-            await query.edit_message_text("📭 No active watches found.")
-            return
-        keyboard = []
-        for idx, w in enumerate(watches):
-            name = w.get("name", f"Watch_{idx}")
-            keyboard.append([
-                InlineKeyboardButton(f"🔍 {name[:30]}", callback_data=f"insp_{idx}"),
-                InlineKeyboardButton("❌", callback_data=f"stop_{idx}")
-            ])
-        await query.edit_message_text(
-            "📋 *Active Watches:*\n_Click 🔍 to inspect or ❌ to stop._", 
-            reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN
-        )
-
-
-# async def stop_watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     if not context.args:
-#         await update.message.reply_text("⚠️ Please specify the watch name to stop. Example:\n`/stop Mandaadi`", parse_mode=ParseMode.MARKDOWN)
-#         return
-    
-#     target_name_input = " ".join(context.args).strip().lower()
-#     watches = load_watches()
-    
-#     # 1. Flexible Matching: Find the watch even if user didn't type the timestamp
-#     matched_watch = None
-#     for w in watches:
-#         watch_name_lower = w.get("name", "").strip().lower()
-#         # Match exact name OR match the base name before the timestamp
-#         if watch_name_lower == target_name_input:
-#             matched_watch = w
-#             break
-    
-#     if not matched_watch:
-#         await update.message.reply_text(f"❌ No watch found matching: `{' '.join(context.args)}`", parse_mode=ParseMode.MARKDOWN)
-#         return
-
-#     exact_watch_name = matched_watch.get("name")
-
-#     # 2. Delete the Telegram Topic
-#     thread_id = matched_watch.get("message_thread_id")
-#     if thread_id and GROUP_CHAT_ID:
-#         try:
-#             await context.bot.delete_forum_topic(chat_id=GROUP_CHAT_ID, message_thread_id=thread_id)
-#             log.info(f"Deleted forum topic {thread_id} for {exact_watch_name}")
-#         except Exception as e:
-#             log.error(f"Failed to delete forum topic: {e}")
-
-#     # 3. Remove from GitHub Watches
-#     updated_watches = [w for w in watches if w.get("name") != exact_watch_name]
-#     save_watches(updated_watches)
-
-#     # 4. Update bms_state.json (Clears Base + ALL discovered variants)
-#     deleted_count = 0
-#     try:
-#         bms_state, sha = _github_get_file(GITHUB_STATE_PATH)
-        
-#         if bms_state and isinstance(bms_state, dict):
-#             # This looks for keys like "Mandaadi_20260908173925" AND "Mandaadi_20260908173925 (Tamil EPIQ)"
-#             keys_to_delete = [
-#                 key for key in bms_state.keys()
-#                 if key.lower().startswith(exact_watch_name.lower())
-#             ]
-            
-#             if keys_to_delete:
-#                 for key in keys_to_delete:
-#                     del bms_state[key]
-                
-#                 _github_put_file(GITHUB_STATE_PATH, bms_state, f"Cleared {len(keys_to_delete)} states for {exact_watch_name}")
-#                 deleted_count = len(keys_to_delete)
-#                 log.info(f"Removed {deleted_count} state entries: {keys_to_delete}")
-#     except Exception as e:
-#         log.error(f"Failed to clear bms_state.json: {e}")
-
-#     # 5. Confirm to user
-#     await update.message.reply_text(
-#         f"✅ Successfully stopped watch!\n"
-#         f"🗑️ Deleted Topic for: `{exact_watch_name}`\n"
-#         f"🧹 Cleared `{deleted_count}` state variant(s) from cache.",
-#         parse_mode=ParseMode.MARKDOWN,
-#     )
-
-# async def inspect_watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     if not context.args:
-#         await update.message.reply_text("⚠️ Please specify the watch name to inspect. Example:\n`/inspect Immortal`", parse_mode=ParseMode.MARKDOWN)
-#         return
-    
-#     target_name = " ".join(context.args).strip().lower()
-#     watches = load_watches()
-    
-#     matched = None
-#     for w in watches:
-#         if w.get("name", "").strip().lower() == target_name:
-#             matched = w
-#             break
-    
-#     if not matched:
-#         await update.message.reply_text(f"❌ No watch found matching name: `{' '.join(context.args)}`", parse_mode=ParseMode.MARKDOWN)
-#         return
-    
-#     langs_str = ", ".join(matched.get("languages", [])) or "ALL"
-#     formats_str = ", ".join(matched.get("formats", [])) or "ALL"
-#     dates_str = ", ".join(matched.get("dates", []))
-#     times_str = ", ".join(matched.get("time_period", [])) or "ALL"
-#     theatre_count = len(matched.get("theatre", []))
-#     theatres_str = f"{theatre_count} selected" if theatre_count > 0 else "ALL"
-    
-#     details = (
-#         f"🔍 *Watch Details: {matched.get('name')}*\n\n"
-#         f"🔗 *URL:* {matched.get('url')}\n"
-#         f"🌐 *Languages:* {langs_str}\n"
-#         f"📦 *Formats:* {formats_str}\n"
-#         f"🏛️ *Theatres:* {theatres_str}\n"
-#         f"📅 *Dates:* {dates_str}\n"
-#         f"⏰ *Times:* {times_str}"
-#     )
-#     await update.message.reply_text(details, parse_mode=ParseMode.MARKDOWN)
-
+        fresh_watches = load_watches()
+        text, reply_markup = build_watches_view(fresh_watches, page=0)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
 # ======================================================================
 # BOT RUNNER
@@ -1166,8 +1094,12 @@ def main():
     
     # Register the requested standalone handlers
     app.add_handler(CommandHandler("watches", list_watches_command,filters=auth_filter))
-    app.add_handler(CallbackQueryHandler(handle_watch_actions, pattern="^(insp_|stop_|confirmstop_|back_to_list)"))
-
+    app.add_handler(
+    CallbackQueryHandler(
+        handle_watch_actions, 
+        pattern="^(wpage_|insp_|stop_|confirmstop_|back_to_list)"
+    )
+)
 
     print("🤖 Telegram Watch Builder Bot is running...")
     app.run_polling()
