@@ -631,7 +631,7 @@ async def handle_date_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE)
             options=time_options,
             selected=watch["time_period"],
             step_prefix="time",
-            columns=2,
+            columns=1,
         )
         await query.edit_message_text(
             f"🎬 *{watch['name']}*\n\n"
