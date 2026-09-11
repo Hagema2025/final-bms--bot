@@ -45,18 +45,31 @@ log = logging.getLogger(__name__)
 load_dotenv()  # Loads variables from your local .env file
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GITHUB_REPO = os.getenv("GITHUB_REPO")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+
+GITHUB_REPO_WATCHES = os.getenv("GITHUB_REPO_WATCHES")
+GITHUB_TOKEN_WATCHES = os.getenv("GITHUB_TOKEN_WATCHES")
 GITHUB_WATCHES_PATH = os.getenv("GITHUB_WATCHES_PATH")
-GITHUB_STATE_PATH = os.getenv("GITHUB_STATE_PATH")
-GROUP_CHAT_ID = os.getenv("GROUP_CHAT_ID")
-GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
+GITHUB_WSTATE_PATH = os.getenv("GITHUB_WSTATE_PATH")
+GITHUB_BRANCH_WATCHES = os.getenv("GITHUB_BRANCH_WATCHES")
+GROUP_CHAT_ID_WATCHES = os.getenv("GROUP_CHAT_ID_WATCHES")
+
+
+GITHUB_REPO_SHOWS = os.getenv("GITHUB_REPO_SHOWS")
+GITHUB_TOKEN_SHOWS = os.getenv("GITHUB_TOKEN_SHOWS")
+GITHUB_SHOWS_PATH = os.getenv("GITHUB_SHOWS_PATH")
+GITHUB_SSTATE_PATH = os.getenv("GITHUB_SSTATE_PATH")
+GITHUB_BRANCH_SHOWS = os.getenv("GITHUB_BRANCH_SHOWS")
+GROUP_CHAT_ID_SHOWS = os.getenv("GROUP_CHAT_ID_SHOWS")
 
 THEATRES_PER_PAGE = 6
 WATCHES_PER_PAGE = 3  # 3 to 4 is ideal so full names fit comfortably on mobile
+
 WATCHES_CACHE = None  # <--- ADD THIS
+SHOWS_CACHE = None
 
 # Conversation States
+# Conversation States (Watches + Manual Shows)
+# Conversation States (Watches + Manual Shows with Seat/Row Prefs)
 (
     STATE_URL,
     STATE_LANGUAGE,
@@ -65,7 +78,16 @@ WATCHES_CACHE = None  # <--- ADD THIS
     STATE_DATE,
     STATE_CUSTOM_DATE,
     STATE_TIME,
-) = range(7)
+    STATE_SHOW_NAME,
+    STATE_SHOW_VENUE,
+    STATE_SHOW_SESSION,
+    STATE_SHOW_DATE,
+    STATE_SHOW_TIME,
+    STATE_SHOW_SEAT_COUNT,
+    STATE_SHOW_ADJACENT,
+    STATE_SHOW_ROWS,
+STATE_SHOW_ROW_SEATS
+) = range(16)
 
 
 # Parse comma-separated IDs into sets of integers
@@ -81,57 +103,79 @@ ALLOWED_USERS = parse_id_list("ALLOWED_USERS")
 
 GITHUB_API_BASE = "https://api.github.com"
 
-def _github_headers():
-    return {"Authorization": f"Bearer {GITHUB_TOKEN}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "bms-telegram-bot"}
+def _github_headers(isWatch):
+    token = GITHUB_TOKEN_WATCHES if isWatch else GITHUB_TOKEN_SHOWS
+    return {
+        "Authorization": f"Bearer {token}", 
+        "Accept": "application/vnd.github+json", 
+        "X-GitHub-Api-Version": "2022-11-28", 
+        "User-Agent": "bms-telegram-bot"
+    }
 
-def _github_get_file(path):
-    r = requests.get(f"{GITHUB_API_BASE}/repos/{GITHUB_REPO}/contents/{path}", headers=_github_headers(), timeout=20)
-    if r.status_code == 404: return None, None
-    r.raise_for_status(); payload = r.json(); raw = base64.b64decode(payload["content"]).decode("utf-8"); return json.loads(raw), payload.get("sha")
+def _github_get_file(path, isWatch):
+    repo = GITHUB_REPO_WATCHES if isWatch else GITHUB_REPO_SHOWS
+    r = requests.get(f"{GITHUB_API_BASE}/repos/{repo}/contents/{path}", headers=_github_headers(isWatch), timeout=20)
+    if r.status_code == 404: 
+        return None, None
+    r.raise_for_status()
+    payload = r.json()
+    raw = base64.b64decode(payload["content"]).decode("utf-8")
+    return json.loads(raw), payload.get("sha")
 
-def _github_put_file(path, data, message):
-    url = f"{GITHUB_API_BASE}/repos/{GITHUB_REPO}/contents/{path}"; content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
+def _github_put_file(path, data, message, isWatch):
+    repo = GITHUB_REPO_WATCHES if isWatch else GITHUB_REPO_SHOWS
+    branch = GITHUB_BRANCH_WATCHES if isWatch else GITHUB_BRANCH_SHOWS
+    url = f"{GITHUB_API_BASE}/repos/{repo}/contents/{path}"
+    content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    
     for attempt in range(3):
-        _, sha = _github_get_file(path); body = {"message": message, "content": base64.b64encode(content.encode()).decode(), "branch": GITHUB_BRANCH}
-        if sha: body["sha"] = sha
-        r = requests.put(url, headers=_github_headers(), json=body, timeout=20)
-        if r.status_code in (200, 201): return
-        if r.status_code == 409 and attempt < 2: continue
+        _, sha = _github_get_file(path, isWatch)
+        body = {
+            "message": message, 
+            "content": base64.b64encode(content.encode()).decode(), 
+            "branch": branch
+        }
+        if sha: 
+            body["sha"] = sha
+        r = requests.put(url, headers=_github_headers(isWatch), json=body, timeout=20)
+        if r.status_code in (200, 201): 
+            return
+        if r.status_code == 409 and attempt < 2: 
+            continue
         r.raise_for_status()
     raise RuntimeError(f"Could not update GitHub file: {path}")
 
+
 def load_watches() -> list:
     global WATCHES_CACHE
-    
-    # If watches are already loaded into memory, return them instantly!
     if WATCHES_CACHE is not None:
         return WATCHES_CACHE
-
-    log.info("Fetching watches from GitHub (This should only happen once!)...")
-    data, _ = _github_get_file(GITHUB_WATCHES_PATH)
-    
-    if isinstance(data, list):
-        WATCHES_CACHE = data
-    elif isinstance(data, dict) and "watches" in data:
-        watches = data["watches"]
-        WATCHES_CACHE = list(watches.values()) if isinstance(watches, dict) else watches
-    else:
-        WATCHES_CACHE = []
-        
+    data, _ = _github_get_file(GITHUB_WATCHES_PATH, True)
+    WATCHES_CACHE = data if isinstance(data, list) else []
     return WATCHES_CACHE
 
 def save_watches(watches: list):
     global WATCHES_CACHE
-    
-    _github_put_file(
-        GITHUB_WATCHES_PATH,
-        watches,  
-        "Update BMS watches"
-    )
-    
-    # Update the in-memory cache immediately so the bot stays in sync
+    _github_put_file(GITHUB_WATCHES_PATH, watches, "Update BMS watches", True)
     WATCHES_CACHE = watches
     log.info("WATCHES SAVED TO GITHUB & CACHE UPDATED | count=%d", len(watches))
+
+
+def load_shows() -> list:
+    global SHOWS_CACHE
+    if SHOWS_CACHE is not None:
+        return SHOWS_CACHE
+    data, _ = _github_get_file(GITHUB_SHOWS_PATH, False)
+    SHOWS_CACHE = data if isinstance(data, list) else []
+    return SHOWS_CACHE
+
+def save_shows(shows: list):
+    global SHOWS_CACHE
+    _github_put_file(GITHUB_SHOWS_PATH, shows, "Update BMS shows", False)
+    SHOWS_CACHE = shows
+
+
 async def is_authorized(update: Update) -> bool:
     """Verifies if the incoming user ID is in ALLOWED_USERS."""
     user = update.effective_user
@@ -191,6 +235,32 @@ def build_watches_view(watches: list, page: int = 0) -> tuple[str, InlineKeyboar
             
         keyboard.append(nav_row)
 
+    return "\n".join(lines), InlineKeyboardMarkup(keyboard)
+
+
+def build_shows_view(shows: list, page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
+    if not shows:
+        return "📭 No active shows found.", None
+    total_pages = max(1, (len(shows) + WATCHES_PER_PAGE - 1) // WATCHES_PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
+    start_idx = page * WATCHES_PER_PAGE
+    page_shows = shows[start_idx:start_idx + WATCHES_PER_PAGE]
+
+    lines = [f"📋 *Active Manual Shows* (Page {page + 1}/{total_pages}):\n"]
+    keyboard = []
+    for offset, s in enumerate(page_shows):
+        global_idx = start_idx + offset
+        display_num = global_idx + 1
+        lines.append(f"*{display_num}.* `{s.get('name')}` | Venue: `{s.get('venue_code')}` | Session: `{s.get('session_id')}`")
+        keyboard.append([
+            InlineKeyboardButton(f"❌ Remove {display_num}", callback_data=f"delshow_{global_idx}")
+        ])
+    if total_pages > 1:
+        nav_row = []
+        if page > 0: nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"spage_{page - 1}"))
+        nav_row.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1: nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"spage_{page + 1}"))
+        keyboard.append(nav_row)
     return "\n".join(lines), InlineKeyboardMarkup(keyboard)
 
 # RENDER HEALTH SERVER
@@ -279,76 +349,225 @@ def start_health_server():
 
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Displays the main UI dashboard with inline buttons."""
-    
-    # 1. Authorization Check
-    if not await is_authorized(update):
-        return ConversationHandler.END
+    if not await is_authorized(update): return ConversationHandler.END
 
     keyboard = [
-        [InlineKeyboardButton("➕ Create New Watch", callback_data="menu_new_watch")],
+        [InlineKeyboardButton("➕ Add Watches", callback_data="menu_new_watch")],
         [InlineKeyboardButton("📋 View Active Watches", callback_data="menu_list_watches")],
-        [InlineKeyboardButton("ℹ️ Help / Instructions", callback_data="menu_help")]
+        [InlineKeyboardButton("➕ Add Shows", callback_data="menu_new_show")],
+        [InlineKeyboardButton("📋 View Active Shows", callback_data="menu_list_shows")],
+        [InlineKeyboardButton("ℹ️ Help", callback_data="menu_help")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    text = (
-        "🍿 *BMS Ticket Watcher Dashboard*\n\n"
-        "Welcome! I am monitoring BookMyShow for you.\n"
-        "What would you like to do?"
-    )
+    text = "🍿 *BMS Ticket Watcher Dashboard*\n\nSelect an option below:"
 
     if update.message:
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
     elif update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-        
     return ConversationHandler.END
 
 async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Routes the button presses from the main menu."""
     query = update.callback_query
     await query.answer()
     
     if query.data == "menu_new_watch":
-        await query.edit_message_text(
-            "🔗 *New Watch Setup*\n\n"
-            "Please paste the full *BookMyShow movie link* you want to monitor.\n\n"
-            "_Example:_\n`https://in.bookmyshow.com/movies/chennai/immortal/ET00513702`",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await query.edit_message_text("🔗 *New Watch Setup*\n\nPlease paste the full *BookMyShow movie link*:", parse_mode=ParseMode.MARKDOWN)
         return STATE_URL
-        
     elif query.data == "menu_list_watches":
-        # Redirect to your existing watches view
         watches = load_watches()
         text, reply_markup = build_watches_view(watches, page=0)
-        
-        # FIX: Convert inline_keyboard tuple to a list so we can append to it
-        keyboard_list = list(reply_markup.inline_keyboard) if reply_markup and reply_markup.inline_keyboard else []
-        keyboard_list.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")])
-        
-        new_reply_markup = InlineKeyboardMarkup(keyboard_list)
-        
-        await query.edit_message_text(text, reply_markup=new_reply_markup, parse_mode=ParseMode.MARKDOWN)
+        kb_list = list(reply_markup.inline_keyboard) if reply_markup and reply_markup.inline_keyboard else []
+        kb_list.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")])
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb_list), parse_mode=ParseMode.MARKDOWN)
         return ConversationHandler.END
-        
+    elif query.data == "menu_new_show":
+        await query.edit_message_text("🎬 *Add Manual Show*\n\nEnter a reference name for this show (e.g., `Leo - AGS Vivira`):", parse_mode=ParseMode.MARKDOWN)
+        context.user_data["show"] = {}
+        return STATE_SHOW_NAME
+    elif query.data == "menu_list_shows":
+        shows = load_shows()
+        text, reply_markup = build_shows_view(shows, page=0)
+        kb_list = list(reply_markup.inline_keyboard) if reply_markup and reply_markup.inline_keyboard else []
+        kb_list.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")])
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb_list), parse_mode=ParseMode.MARKDOWN)
+        return ConversationHandler.END
     elif query.data == "menu_help":
-        help_text = (
-            "ℹ️ *How to use this bot:*\n\n"
-            "1. Click *Create New Watch* and paste a BMS URL.\n"
-            "2. Follow the buttons to select Language, Format, Theatres, Dates, and Times.\n"
-            "3. The bot will create a dedicated topic in your Group Chat for alerts.\n\n"
-            "Make sure your `GROUP_CHAT_ID` is set correctly!"
-        )
+        help_text = "ℹ️ *Instructions:*\nUse *Add Watches* for URL filters or *Add Shows* for direct manual session tracking."
         kb = [[InlineKeyboardButton("🏠 Back to Menu", callback_data="menu_main")]]
         await query.edit_message_text(help_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
         return ConversationHandler.END
-        
     elif query.data == "menu_main":
         await show_main_menu(update, context)
         return ConversationHandler.END
+
+
+# Manual Show Flow Handlers
+async def receive_show_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["show"]["name"] = update.message.text.strip()
+    await update.message.reply_text("Enter Venue Code (e.g., `INTO` or `RAKK`):", parse_mode=ParseMode.MARKDOWN)
+    return STATE_SHOW_VENUE
+
+async def receive_show_venue(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["show"]["venue_code"] = update.message.text.strip().upper()
+    await update.message.reply_text("Enter Session ID (e.g., `90164`):", parse_mode=ParseMode.MARKDOWN)
+    return STATE_SHOW_SESSION
+
+async def receive_show_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["show"]["session_id"] = update.message.text.strip()
+    await update.message.reply_text("Enter Date in `YYYYMMDD` format (e.g., `20260915`):", parse_mode=ParseMode.MARKDOWN)
+    return STATE_SHOW_DATE
+
+async def receive_show_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["show"]["date"] = update.message.text.strip()
+    await update.message.reply_text("Enter Show Time for user clarity (e.g., `10:00 AM`):", parse_mode=ParseMode.MARKDOWN)
+    return STATE_SHOW_TIME
+
+async def receive_show_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["show"]["show_time"] = update.message.text.strip()
+    await update.message.reply_text("How many seats do you need? (e.g., `2` or `4`):", parse_mode=ParseMode.MARKDOWN)
+    return STATE_SHOW_SEAT_COUNT
+
+async def receive_show_seat_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        count = int(update.message.text.strip())
+        if count <= 0: raise ValueError()
+        context.user_data["show"]["seat_count"] = count
+    except ValueError:
+        await update.message.reply_text("⚠️ Please enter a valid positive number:")
+        return STATE_SHOW_SEAT_COUNT
+
+    kb = [
+        [
+            InlineKeyboardButton("✅ Yes (Strictly Adjacent)", callback_data="show_adj_yes"),
+            InlineKeyboardButton("❌ No (Distributed OK)", callback_data="show_adj_no")
+        ]
+    ]
+    await update.message.reply_text(
+        "👥 *Adjacency Requirement*\n\nDo you require strictly adjacent/consecutive seats?",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return STATE_SHOW_ADJACENT
+
+async def receive_show_adjacency(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["show"]["require_adjacent"] = (query.data == "show_adj_yes")
+
+    await query.edit_message_text(
+        "🔤 *Preferred Rows*\n\nEnter preferred rows separated by commas (e.g., `H,I,J`) or type `ALL`:",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return STATE_SHOW_ROWS
+
+async def receive_show_rows(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (update.message.text or "").strip().upper()
+    show = context.user_data["show"]
+    
+    if text == "ALL" or text == "ANY":
+        show["row_preferences"] = {} # Empty means any row/seat is fine
+        return await finalize_manual_show(update, context)
+        
+    rows = [r.strip() for r in text.split(",") if r.strip()]
+    show["pending_rows"] = rows
+    show["row_preferences"] = {}
+    
+    # Prompt for the first row's seats
+    first_row = rows[0]
+    await update.message.reply_text(
+        f"🔢 *Preferred Seats for Row {first_row}*\n\n"
+        "Enter preferred seat numbers separated by commas (e.g., `10,11,12`) or type `ANY`:",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return STATE_SHOW_ROW_SEATS
+
+
+async def receive_row_seats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (update.message.text or "").strip().upper()
+    show = context.user_data["show"]
+    
+    pending_rows = show.get("pending_rows", [])
+    current_row = pending_rows.pop(0)
+    
+    # Save preference for this row
+    seats = [] if text in ("ANY", "ALL") else [s.strip() for s in text.split(",") if s.strip()]
+    show["row_preferences"][current_row] = seats
+    
+    if pending_rows:
+        # Ask for the next row
+        next_row = pending_rows[0]
+        await update.message.reply_text(
+            f"🔢 *Preferred Seats for Row {next_row}*\n\n"
+            "Enter preferred seat numbers separated by commas or type `ANY`:",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return STATE_SHOW_ROW_SEATS
+    else:
+        # All rows configured, finalize save
+        return await finalize_manual_show(update, context)
+
+async def finalize_manual_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    show_entry = context.user_data["show"]
+
+    raw_date = show_entry.get("date", "")
+    try:
+      formatted_date = datetime.strptime(raw_date, "%Y%m%d").strftime("%d%m%y")
+    except ValueError:
+      formatted_date = raw_date
+    
+    thread_id = None
+    if GROUP_CHAT_ID_SHOWS:
+        try:
+            esc = lambda text: escape_markdown(str(text), version=2)
+            topic_name = f"{show_entry.get('name', 'Show')}_{show_entry.get('venue_code', 'Venue')}_{formatted_date}|{show_entry.get('show_time', 'Time')}"[:128]
+            topic = await context.bot.create_forum_topic(chat_id=GROUP_CHAT_ID_SHOWS, name=topic_name)
+            thread_id = topic.message_thread_id
+            
+            if show_entry["row_preferences"]:
+                prefs_summary = ", ".join([f"Row {r}: {s}" if s else f"Row {r}: ANY" for r, s in show_entry["row_preferences"].items()])
+            else:
+                prefs_summary = "ALL ROWS / ANY SEATS"
+
+            adj_text = "Yes (Strictly Adjacent)" if show_entry.get("require_adjacent", True) else "No (Distributed OK)"
+
+            summary = (
+                "🎉 *Manual Show Configuration Summary*\n\n"
+                f"🎬 *Name:* {esc(show_entry['name'])}\n"
+                f"🏛️ *Venue Code:* {esc(show_entry['venue_code'])}\n"
+                f"🆔 *Session ID:* {esc(show_entry['session_id'])}\n"
+                f"📅 *Date:* {esc(show_entry['date'])}\n"
+                f"⏰ *Time:* {esc(show_entry['show_time'])}\n"
+                f"💺 *Seats Required:* {esc(show_entry['seat_count'])}\n"
+                f"👥 *Strict Adjacent:* {esc(adj_text)}\n"
+                f"📍 *Row Preferences:* {esc(prefs_summary)}\n\n"
+                "🔔 _Automated alerts for this manual show will appear in this topic\\._"
+            )
+            topic_msg = await context.bot.send_message(
+                chat_id=GROUP_CHAT_ID_SHOWS, message_thread_id=thread_id, text=summary, parse_mode=ParseMode.MARKDOWN_V2
+            )
+            await context.bot.pin_chat_message(chat_id=GROUP_CHAT_ID_SHOWS, message_id=topic_msg.message_id)
+        except Exception as e:
+            log.error(f"Failed to create show forum topic: {e}")
+
+    show_entry["message_thread_id"] = thread_id
+    
+    shows = load_shows()
+    shows.append(show_entry)
+    save_shows(shows)
+
+    await update.message.reply_text(
+        f"✅ *Manual Show Added Successfully!*\n\n"
+        f"Name: `{show_entry['name']}`\n"
+        f"Venue: `{show_entry['venue_code']}`\n"
+        f"Session ID: `{show_entry['session_id']}`\n"
+        f"A dedicated topic has been created in the group.",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    context.user_data.clear()
+    return ConversationHandler.END
+
 
     
 def parse_bms_url(url: str) -> dict:
@@ -881,18 +1100,18 @@ async def handle_time_toggle_and_save(update: Update, context: ContextTypes.DEFA
 
         # 3. Create a Forum Topic, send the summary, and pin it
         thread_id = None
-        if GROUP_CHAT_ID:
+        if GROUP_CHAT_ID_WATCHES:
             try:
                 # Create the topic
                 topic = await context.bot.create_forum_topic(
-                    chat_id=GROUP_CHAT_ID, 
+                    chat_id=GROUP_CHAT_ID_WATCHES, 
                     name=watch_name[:128] # Telegram limits topic names to 128 chars
                 )
                 thread_id = topic.message_thread_id
                 
                 # Send the summary directly into the new topic
                 topic_msg = await context.bot.send_message(
-                    chat_id=GROUP_CHAT_ID,
+                    chat_id=GROUP_CHAT_ID_WATCHES,
                     message_thread_id=thread_id,
                     text=summary,
                     parse_mode=ParseMode.MARKDOWN_V2
@@ -900,7 +1119,7 @@ async def handle_time_toggle_and_save(update: Update, context: ContextTypes.DEFA
                 
                 # Pin the summary message inside the topic
                 await context.bot.pin_chat_message(
-                    chat_id=GROUP_CHAT_ID,
+                    chat_id=GROUP_CHAT_ID_WATCHES,
                     message_id=topic_msg.message_id
                 )
             except Exception as e:
@@ -994,6 +1213,10 @@ async def list_watches_command(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode=ParseMode.MARKDOWN
     )
 
+async def list_shows_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text, reply_markup = build_shows_view(load_shows(), page=0)
+    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+
 async def handle_watch_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- ADD THIS SECURITY CHECK FIRST ---
     if not await is_authorized(update):
@@ -1066,9 +1289,9 @@ async def handle_watch_actions(update: Update, context: ContextTypes.DEFAULT_TYP
 
         # Delete Topic
         thread_id = matched.get("message_thread_id")
-        if thread_id and GROUP_CHAT_ID:
+        if thread_id and GROUP_CHAT_ID_WATCHES:
             try:
-                await context.bot.delete_forum_topic(chat_id=GROUP_CHAT_ID, message_thread_id=thread_id)
+                await context.bot.delete_forum_topic(chat_id=GROUP_CHAT_ID_WATCHES, message_thread_id=thread_id)
             except Exception as e:
                 log.error(f"Failed to delete forum topic: {e}")
 
@@ -1079,13 +1302,13 @@ async def handle_watch_actions(update: Update, context: ContextTypes.DEFAULT_TYP
         # Clear State Cache
         deleted_count = 0
         try:
-            bms_state, sha = _github_get_file(GITHUB_STATE_PATH)
+            bms_state, sha = _github_get_file(GITHUB_WSTATE_PATH,True)
             if bms_state and isinstance(bms_state, dict):
                 keys_to_delete = [k for k in bms_state.keys() if k.lower().startswith(exact_watch_name.lower())]
                 if keys_to_delete:
                     for k in keys_to_delete:
                         del bms_state[k]
-                    _github_put_file(GITHUB_STATE_PATH, bms_state, f"Cleared states for {exact_watch_name}")
+                    _github_put_file(GITHUB_WSTATE_PATH, bms_state, f"Cleared states for {exact_watch_name}",True)
                     deleted_count = len(keys_to_delete)
         except Exception as e:
             log.error(f"Failed to clear bms_state.json: {e}")
@@ -1154,6 +1377,16 @@ CommandHandler("start", start_command, filters=auth_filter),
                 CallbackQueryHandler(cancel_watch, pattern="^cancel_watch$"),
                 CallbackQueryHandler(handle_time_toggle_and_save),
             ],
+
+            STATE_SHOW_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_name)],
+    STATE_SHOW_VENUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_venue)],
+    STATE_SHOW_SESSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_session)],
+    STATE_SHOW_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_date)],
+    STATE_SHOW_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_time)],
+    STATE_SHOW_SEAT_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_seat_count)],
+    STATE_SHOW_ADJACENT: [CallbackQueryHandler(receive_show_adjacency, pattern="^show_adj_")],
+    STATE_SHOW_ROWS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_rows)],
+    STATE_SHOW_ROW_SEATS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_row_seats)],
         },
         fallbacks=[CommandHandler("cancel", cancel_watch,filters=auth_filter),
                    CallbackQueryHandler(handle_main_menu, pattern="^menu_main$") # Allow going back to menu
