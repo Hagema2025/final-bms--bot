@@ -1328,6 +1328,40 @@ async def handle_watch_actions(update: Update, context: ContextTypes.DEFAULT_TYP
         text, reply_markup = build_watches_view(fresh_watches, page=0)
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
+
+async def handle_show_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_authorized(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    shows = load_shows()
+
+    if data.startswith("spage_"):
+        page_num = int(data.split("_")[1])
+        text, reply_markup = build_shows_view(shows, page=page_num)
+        kb_list = list(reply_markup.inline_keyboard) if reply_markup and reply_markup.inline_keyboard else []
+        kb_list.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")])
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb_list), parse_mode=ParseMode.MARKDOWN)
+
+    elif data.startswith("delshow_"):
+        idx = int(data.split("_")[1])
+        if idx < len(shows):
+            matched_show = shows[idx]
+            thread_id = matched_show.get("message_thread_id")
+            if thread_id and GROUP_CHAT_ID_SHOWS:
+                try:
+                    await context.bot.delete_forum_topic(chat_id=GROUP_CHAT_ID_SHOWS, message_thread_id=thread_id)
+                except Exception as e:
+                    log.error(f"Failed to delete show forum topic: {e}")
+            updated_shows = [s for i, s in enumerate(shows) if i != idx]
+            save_shows(updated_shows)
+            
+        text, reply_markup = build_shows_view(load_shows(), page=0)
+        kb_list = list(reply_markup.inline_keyboard) if reply_markup and reply_markup.inline_keyboard else []
+        kb_list.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")])
+        await query.edit_message_text("✅ Manual show successfully removed and topic deleted.", reply_markup=InlineKeyboardMarkup(kb_list), parse_mode=ParseMode.MARKDOWN)
+
 # ======================================================================
 # BOT RUNNER
 # ======================================================================
@@ -1345,9 +1379,9 @@ def main():
 
     conv_handler = ConversationHandler(
         entry_points=[
-CommandHandler("start", start_command, filters=auth_filter),
+            CommandHandler("start", start_command, filters=auth_filter),
             CommandHandler("newwatch", start_command, filters=auth_filter),
-            CallbackQueryHandler(handle_main_menu, pattern="^menu_new_watch$"), # NEW: Button entry point
+            CallbackQueryHandler(handle_main_menu, pattern="^menu_(new_watch|new_show)$"),
             MessageHandler(filters.Regex(r"bookmyshow\.com"), receive_url),
         ],
         states={
@@ -1398,7 +1432,7 @@ CommandHandler("start", start_command, filters=auth_filter),
     app.add_handler(
         CallbackQueryHandler(
             handle_main_menu, 
-            pattern="^menu_(list_watches|help|main)$"
+            pattern="^menu_(list_watches|list_shows|new_show|help|main)$"
         )
     )
     # Register the requested standalone handlers
@@ -1410,6 +1444,7 @@ CommandHandler("start", start_command, filters=auth_filter),
     )
 )
 
+    app.add_handler(CallbackQueryHandler(handle_show_actions, pattern="^(spage_|delshow_)"))
     print("🤖 Telegram Watch Builder Bot is running...")
     app.run_polling()
 
