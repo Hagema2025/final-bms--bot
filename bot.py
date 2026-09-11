@@ -325,10 +325,13 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         watches = load_watches()
         text, reply_markup = build_watches_view(watches, page=0)
         
-        # Add a "Back to Menu" button at the bottom
-        reply_markup.inline_keyboard.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")])
+        # FIX: Convert inline_keyboard tuple to a list so we can append to it
+        keyboard_list = list(reply_markup.inline_keyboard) if reply_markup and reply_markup.inline_keyboard else []
+        keyboard_list.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")])
         
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+        new_reply_markup = InlineKeyboardMarkup(keyboard_list)
+        
+        await query.edit_message_text(text, reply_markup=new_reply_markup, parse_mode=ParseMode.MARKDOWN)
         return ConversationHandler.END
         
     elif query.data == "menu_help":
