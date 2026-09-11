@@ -277,6 +277,77 @@ def start_health_server():
 # HELPER FUNCTIONS
 # ======================================================================
 
+
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays the main UI dashboard with inline buttons."""
+    
+    # 1. Authorization Check
+    if not await is_authorized(update):
+        return ConversationHandler.END
+
+    keyboard = [
+        [InlineKeyboardButton("➕ Create New Watch", callback_data="menu_new_watch")],
+        [InlineKeyboardButton("📋 View Active Watches", callback_data="menu_list_watches")],
+        [InlineKeyboardButton("ℹ️ Help / Instructions", callback_data="menu_help")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        "🍿 *BMS Ticket Watcher Dashboard*\n\n"
+        "Welcome! I am monitoring BookMyShow for you.\n"
+        "What would you like to do?"
+    )
+
+    if update.message:
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+    elif update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+        
+    return ConversationHandler.END
+
+async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Routes the button presses from the main menu."""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "menu_new_watch":
+        await query.edit_message_text(
+            "🔗 *New Watch Setup*\n\n"
+            "Please paste the full *BookMyShow movie link* you want to monitor.\n\n"
+            "_Example:_\n`https://in.bookmyshow.com/movies/chennai/immortal/ET00513702`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return STATE_URL
+        
+    elif query.data == "menu_list_watches":
+        # Redirect to your existing watches view
+        watches = load_watches()
+        text, reply_markup = build_watches_view(watches, page=0)
+        
+        # Add a "Back to Menu" button at the bottom
+        reply_markup.inline_keyboard.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")])
+        
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+        return ConversationHandler.END
+        
+    elif query.data == "menu_help":
+        help_text = (
+            "ℹ️ *How to use this bot:*\n\n"
+            "1. Click *Create New Watch* and paste a BMS URL.\n"
+            "2. Follow the buttons to select Language, Format, Theatres, Dates, and Times.\n"
+            "3. The bot will create a dedicated topic in your Group Chat for alerts.\n\n"
+            "Make sure your `GROUP_CHAT_ID` is set correctly!"
+        )
+        kb = [[InlineKeyboardButton("🏠 Back to Menu", callback_data="menu_main")]]
+        await query.edit_message_text(help_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+        return ConversationHandler.END
+        
+    elif query.data == "menu_main":
+        await show_main_menu(update, context)
+        return ConversationHandler.END
+
+    
 def parse_bms_url(url: str) -> dict:
     path = urlparse(url).path.strip("/")
     parts = path.split("/")
@@ -419,15 +490,9 @@ def append_to_watches_file(watch_entry: dict):
 # ======================================================================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    log.info(f"User {update.effective_user.id} started command execution.")
-    await update.message.reply_text(
-        "👋 *Welcome to BookMyShow Ticket Watcher Setup!*\n\n"
-        "Send me the *BookMyShow movie link* you want to monitor.\n\n"
-        "_Example:_\n"
-        "`https://in.bookmyshow.com/movies/chennai/immortal/ET00513702`",
-        parse_mode=ParseMode.MARKDOWN,
-    )
-    return STATE_URL
+    log.info(f"User {update.effective_user.id} requested the main menu.")
+    await show_main_menu(update, context)
+    return ConversationHandler.END
 
 
 async def receive_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1054,8 +1119,9 @@ def main():
 
     conv_handler = ConversationHandler(
         entry_points=[
-            CommandHandler("newwatch", start_command,filters=auth_filter),
-            CommandHandler("start", start_command,filters=auth_filter),
+CommandHandler("start", start_command, filters=auth_filter),
+            CommandHandler("newwatch", start_command, filters=auth_filter),
+            CallbackQueryHandler(handle_main_menu, pattern="^menu_new_watch$"), # NEW: Button entry point
             MessageHandler(filters.Regex(r"bookmyshow\.com"), receive_url),
         ],
         states={
@@ -1086,12 +1152,19 @@ def main():
                 CallbackQueryHandler(handle_time_toggle_and_save),
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel_watch,filters=auth_filter)],
+        fallbacks=[CommandHandler("cancel", cancel_watch,filters=auth_filter),
+                   CallbackQueryHandler(handle_main_menu, pattern="^menu_main$") # Allow going back to menu
+                   ],
         allow_reentry=True,  # <--- CRITICAL FIX: Allows /start or URL entry while in an active state
     )
 
     app.add_handler(conv_handler)
-    
+    app.add_handler(
+        CallbackQueryHandler(
+            handle_main_menu, 
+            pattern="^menu_(list_watches|help|main)$"
+        )
+    )
     # Register the requested standalone handlers
     app.add_handler(CommandHandler("watches", list_watches_command,filters=auth_filter))
     app.add_handler(
