@@ -346,7 +346,47 @@ def start_health_server():
 # ======================================================================
 # HELPER FUNCTIONS
 # ======================================================================
+def parse_seat_preferences(text: str) -> list:
+    text = text.strip().upper()
+    if text in ("ANY", "ALL", ""):
+        return []
+    
+    # Split the input into included and excluded parts
+    include_text, exclude_text = text, ""
+    if "EXCEPT" in text:
+        include_text, exclude_text = text.split("EXCEPT", 1)
+    elif "!" in text:
+        include_text, exclude_text = text.split("!", 1)
+        
+    def expand_ranges(part: str) -> set:
+        seats = set()
+        for item in part.split(","):
+            item = item.strip()
+            if not item: continue
+            
+            # If it's a range like "1-30"
+            if "-" in item:
+                try:
+                    start, end = map(int, item.split("-", 1))
+                    if start <= end:
+                        seats.update(range(start, end + 1))
+                except ValueError:
+                    pass # Ignore invalid ranges safely
+            else:
+                try:
+                    seats.add(int(item))
+                except ValueError:
+                    pass
+        return seats
 
+    # Parse both sides, then subtract the excluded seats from the included seats
+    include_seats = expand_ranges(include_text)
+    exclude_seats = expand_ranges(exclude_text)
+    
+    final_seats = include_seats - exclude_seats
+    
+    # Return as a list of sorted string numbers (which your existing logic expects)
+    return [str(s) for s in sorted(final_seats)]
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update): return ConversationHandler.END
@@ -461,12 +501,11 @@ async def receive_show_adjacency(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode=ParseMode.MARKDOWN
     )
     return STATE_SHOW_ROWS
-
 async def receive_show_rows(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip().upper()
     show = context.user_data["show"]
     
-    if text == "ALL" or text == "ANY":
+    if text in ("ALL", "ANY"):
         show["row_preferences"] = {} # Empty means any row/seat is fine
         return await finalize_manual_show(update, context)
         
@@ -474,15 +513,19 @@ async def receive_show_rows(update: Update, context: ContextTypes.DEFAULT_TYPE):
     show["pending_rows"] = rows
     show["row_preferences"] = {}
     
-    # Prompt for the first row's seats
     first_row = rows[0]
     await update.message.reply_text(
         f"🔢 *Preferred Seats for Row {first_row}*\n\n"
-        "Enter preferred seat numbers separated by commas (e.g., `10,11,12`) or type `ANY`:",
+        "Enter seats using commas, ranges, or exclusions.\n"
+        "Examples:\n"
+        "• `1, 2, 3`\n"
+        "• `1-30`\n"
+        "• `1-30 except 15, 16`\n"
+        "• `1-30 ! 10-20`\n"
+        "Or type `ANY` if you don't care about specific seats in this row:",
         parse_mode=ParseMode.MARKDOWN
     )
     return STATE_SHOW_ROW_SEATS
-
 
 async def receive_row_seats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip().upper()
@@ -491,23 +534,20 @@ async def receive_row_seats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pending_rows = show.get("pending_rows", [])
     current_row = pending_rows.pop(0)
     
-    # Save preference for this row
-    seats = [] if text in ("ANY", "ALL") else [s.strip() for s in text.split(",") if s.strip()]
-    show["row_preferences"][current_row] = seats
+    # 🔥 Use our new helper function here
+    show["row_preferences"][current_row] = parse_seat_preferences(text)
     
     if pending_rows:
-        # Ask for the next row
         next_row = pending_rows[0]
         await update.message.reply_text(
             f"🔢 *Preferred Seats for Row {next_row}*\n\n"
-            "Enter preferred seat numbers separated by commas or type `ANY`:",
+            "Enter seats using commas, ranges, or exclusions (e.g. `1-30 except 15,16`) or type `ANY`:",
             parse_mode=ParseMode.MARKDOWN
         )
         return STATE_SHOW_ROW_SEATS
     else:
-        # All rows configured, finalize save
         return await finalize_manual_show(update, context)
-
+    
 async def finalize_manual_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
     show_entry = context.user_data["show"]
 
