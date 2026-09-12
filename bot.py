@@ -1328,7 +1328,6 @@ async def handle_watch_actions(update: Update, context: ContextTypes.DEFAULT_TYP
         text, reply_markup = build_watches_view(fresh_watches, page=0)
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
-
 async def handle_show_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update):
         return
@@ -1349,20 +1348,52 @@ async def handle_show_actions(update: Update, context: ContextTypes.DEFAULT_TYPE
         if idx < len(shows):
             matched_show = shows[idx]
             thread_id = matched_show.get("message_thread_id")
+            
+            # --- 1. Properly Close and Delete Topic ---
             if thread_id and GROUP_CHAT_ID_SHOWS:
                 try:
+                    # Closing it first forces the Telegram UI to update immediately
+                    await context.bot.close_forum_topic(chat_id=GROUP_CHAT_ID_SHOWS, message_thread_id=thread_id)
                     await context.bot.delete_forum_topic(chat_id=GROUP_CHAT_ID_SHOWS, message_thread_id=thread_id)
                 except Exception as e:
                     log.error(f"Failed to delete show forum topic: {e}")
+            
+            # --- 2. Remove from shows.json ---
             updated_shows = [s for i, s in enumerate(shows) if i != idx]
             save_shows(updated_shows)
             
+            # --- 3. Clean up state.json ---
+            deleted_count = 0
+            try:
+                # isWatch=False tells it to use GITHUB_SSTATE_PATH
+                s_state, sha = _github_get_file(GITHUB_SSTATE_PATH, False) 
+                if s_state and isinstance(s_state, dict):
+                    v_code = matched_show.get('venue_code', '')
+                    s_id = matched_show.get('session_id', '')
+                    
+                    # Match keys starting with VenueCode_SessionID (e.g., "INTO_90169")
+                    prefix = f"{v_code}_{s_id}"
+                    keys_to_delete = [k for k in s_state.keys() if k.startswith(prefix)]
+                    
+                    if keys_to_delete:
+                        for k in keys_to_delete:
+                            del s_state[k]
+                        _github_put_file(GITHUB_SSTATE_PATH, s_state, f"Cleared state for {prefix}", False)
+                        deleted_count = len(keys_to_delete)
+            except Exception as e:
+                log.error(f"Failed to clear shows state.json: {e}")
+                
         text, reply_markup = build_shows_view(load_shows(), page=0)
         kb_list = list(reply_markup.inline_keyboard) if reply_markup and reply_markup.inline_keyboard else []
         kb_list.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")])
-        await query.edit_message_text("✅ Manual show successfully removed and topic deleted.", reply_markup=InlineKeyboardMarkup(kb_list), parse_mode=ParseMode.MARKDOWN)
-
-# ======================================================================
+        
+        await query.edit_message_text(
+            f"✅ *Manual show successfully removed!*\n"
+            f"🗑️ Topic deleted.\n"
+            f"🧹 Cleared `{deleted_count}` state record(s).", 
+            reply_markup=InlineKeyboardMarkup(kb_list), 
+            parse_mode=ParseMode.MARKDOWN
+        )# ======================================================================
 # BOT RUNNER
 # ======================================================================
 auth_filter = filters.User(user_id=list(ALLOWED_USERS)) if ALLOWED_USERS else filters.ALL
