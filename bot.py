@@ -1412,7 +1412,7 @@ async def handle_show_actions(update: Update, context: ContextTypes.DEFAULT_TYPE
                     s_id = matched_show.get('session_id', '')
                     
                     # Match keys starting with VenueCode_SessionID (e.g., "INTO_90169")
-                    prefix = f"{v_code}_{s_id}"
+                    prefix = f"{v_code}_{s_id}_{thread_id}"
                     keys_to_delete = [k for k in s_state.keys() if k.startswith(prefix)]
                     
                     if keys_to_delete:
