@@ -265,46 +265,31 @@ def build_shows_view(shows: list, page: int = 0) -> tuple[str, InlineKeyboardMar
 
 # RENDER HEALTH SERVER
 # ============================================================
-
-class HealthHandler(
-    BaseHTTPRequestHandler
-):
-
+class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-
-        if self.path in (
-            "/",
-            "/health",
-        ):
-
+        if self.path in ("/", "/health"):
             body = b"OK"
-
             self.send_response(200)
-
-            self.send_header(
-                "Content-Type",
-                "text/plain",
-            )
-
-            self.send_header(
-                "Content-Length",
-                str(len(body)),
-            )
-
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-
             self.wfile.write(body)
-
         else:
-
             self.send_response(404)
             self.end_headers()
 
-    def log_message(
-        self,
-        format,
-        *args,
-    ):
+    # UptimeRobot relies on HEAD requests to check server status
+    def do_HEAD(self):
+        if self.path in ("/", "/health"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        # Suppress noisy HTTP logs
         return
 
 
