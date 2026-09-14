@@ -1388,23 +1388,32 @@ async def handle_show_actions(update: Update, context: ContextTypes.DEFAULT_TYPE
             save_shows(updated_shows)
             
             # --- 3. Clean up state.json ---
+            # --- 3. Clean up state.json ---
             deleted_count = 0
             try:
                 # isWatch=False tells it to use GITHUB_SSTATE_PATH
                 s_state, sha = _github_get_file(GITHUB_SSTATE_PATH, False) 
                 if s_state and isinstance(s_state, dict):
-                    v_code = matched_show.get('venue_code', '')
-                    s_id = matched_show.get('session_id', '')
+                    # Force string, strip spaces, and uppercase for a safe comparison
+                    v_code = str(matched_show.get('venue_code', '')).strip().upper()
+                    s_id = str(matched_show.get('session_id', '')).strip()
                     
-                    # Match keys starting with VenueCode_SessionID (e.g., "INTO_90169")
-                    prefix = f"{v_code}_{s_id}"
-                    keys_to_delete = [k for k in s_state.keys() if k.startswith(prefix)]
+                    # Add an underscore to ensure exact session matching (e.g. INTO_90204_)
+                    prefix = f"{v_code}_{s_id}_"
+                    
+                    # Safely find all matching keys
+                    keys_to_delete = [k for k in s_state.keys() if str(k).upper().startswith(prefix)]
                     
                     if keys_to_delete:
                         for k in keys_to_delete:
                             del s_state[k]
+                            
+                        # Push the cleaned dictionary back to GitHub
                         _github_put_file(GITHUB_SSTATE_PATH, s_state, f"Cleared state for {prefix}", False)
                         deleted_count = len(keys_to_delete)
+                        log.info(f"Successfully deleted {deleted_count} state keys for {prefix}")
+                    else:
+                        log.warning(f"No matching state keys found for prefix: {prefix}. Current keys: {list(s_state.keys())}")
             except Exception as e:
                 log.error(f"Failed to clear shows state.json: {e}")
                 
