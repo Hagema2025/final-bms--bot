@@ -78,16 +78,14 @@ SHOWS_CACHE = None
     STATE_DATE,
     STATE_CUSTOM_DATE,
     STATE_TIME,
+    STATE_SHOW_URL,
     STATE_SHOW_NAME,
-    STATE_SHOW_VENUE,
-    STATE_SHOW_SESSION,
-    STATE_SHOW_DATE,
     STATE_SHOW_TIME,
     STATE_SHOW_SEAT_COUNT,
     STATE_SHOW_ADJACENT,
     STATE_SHOW_ROWS,
 STATE_SHOW_ROW_SEATS
-) = range(16)
+) = range(14)
 
 
 # Parse comma-separated IDs into sets of integers
@@ -331,6 +329,24 @@ def start_health_server():
 # ======================================================================
 # HELPER FUNCTIONS
 # ======================================================================
+
+def parse_seat_layout_url(url: str) -> dict:
+    """Extracts venue, session, and date from a BMS seat layout URL."""
+    path = urlparse(url).path.strip("/")
+    parts = path.split("/")
+
+    if "seat-layout" in parts:
+        idx = parts.index("seat-layout")
+        # Structure: .../seat-layout/{event_code}/{venue_code}/{session_id}/{date}
+        if idx + 4 < len(parts):
+            return {
+                "event_code": parts[idx + 1],
+                "venue_code": parts[idx + 2],
+                "session_id": parts[idx + 3],
+                "date": parts[idx + 4],
+            }
+    raise ValueError("Invalid URL: missing seat-layout information (venue code, session, or date).")
+
 def parse_seat_preferences(text: str) -> list:
     text = text.strip().upper()
     if text in ("ANY", "ALL", ""):
@@ -408,9 +424,13 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb_list), parse_mode=ParseMode.MARKDOWN)
         return ConversationHandler.END
     elif query.data == "menu_new_show":
-        await query.edit_message_text("🎬 *Add Manual Show*\n\nEnter a reference name for this show (e.g., `Leo - AGS Vivira`):", parse_mode=ParseMode.MARKDOWN)
+        await query.edit_message_text(
+            "🎬 *Add Manual Show*\n\nPlease paste the full *BookMyShow seat-layout URL*:\n\n"
+            "_Example: https://in.bookmyshow.com/movies/chen/seat-layout/ET00442702/RAKK/3934/20260919_", 
+            parse_mode=ParseMode.MARKDOWN
+        )
         context.user_data["show"] = {}
-        return STATE_SHOW_NAME
+        return STATE_SHOW_URL
     elif query.data == "menu_list_shows":
         shows = load_shows()
         text, reply_markup = build_shows_view(shows, page=0)
@@ -428,26 +448,34 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
 
-# Manual Show Flow Handlers
+async def receive_show_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = (update.message.text or "").strip()
+    try:
+        parsed = parse_seat_layout_url(url)
+        context.user_data["show"]["venue_code"] = parsed["venue_code"].upper()
+        context.user_data["show"]["session_id"] = parsed["session_id"]
+        context.user_data["show"]["date"] = parsed["date"]
+    except ValueError as e:
+        await update.message.reply_text(f"⚠️ {e}\n\nPlease paste a valid seat layout URL:")
+        return STATE_SHOW_URL
+
+    await update.message.reply_text(
+        f"✅ *Extracted Data:*\n"
+        f"🏛️ Venue: `{parsed['venue_code'].upper()}`\n"
+        f"🆔 Session: `{parsed['session_id']}`\n"
+        f"📅 Date: `{parsed['date']}`\n\n"
+        "Now, enter a reference name for this show (e.g., `Leo - AGS Vivira`):",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return STATE_SHOW_NAME
+
 async def receive_show_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["show"]["name"] = update.message.text.strip()
-    await update.message.reply_text("Enter Venue Code (e.g., `INTO` or `RAKK`):", parse_mode=ParseMode.MARKDOWN)
-    return STATE_SHOW_VENUE
-
-async def receive_show_venue(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["show"]["venue_code"] = update.message.text.strip().upper()
-    await update.message.reply_text("Enter Session ID (e.g., `90164`):", parse_mode=ParseMode.MARKDOWN)
-    return STATE_SHOW_SESSION
-
-async def receive_show_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["show"]["session_id"] = update.message.text.strip()
-    await update.message.reply_text("Enter Date in `YYYYMMDD` format (e.g., `20260915`):", parse_mode=ParseMode.MARKDOWN)
-    return STATE_SHOW_DATE
-
-async def receive_show_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["show"]["date"] = update.message.text.strip()
+    # Skip the venue/session/date states and go directly to time
     await update.message.reply_text("Enter Show Time for user clarity (e.g., `10:00 AM`):", parse_mode=ParseMode.MARKDOWN)
     return STATE_SHOW_TIME
+
+
 
 async def receive_show_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["show"]["show_time"] = update.message.text.strip()
@@ -735,7 +763,80 @@ def append_to_watches_file(watch_entry: dict):
 # ======================================================================
 # CONVERSATION STEP HANDLERS
 # ======================================================================
+async def handle_smart_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = (update.message.text or "").strip()
+    log.info(f"Smart router received link: {url}")
 
+    # --- BRANCH 1: SHOW LINK ---
+    if "seat-layout" in url:
+        try:
+            parsed = parse_seat_layout_url(url)
+            context.user_data["show"] = {
+                "venue_code": parsed["venue_code"].upper(),
+                "session_id": parsed["session_id"],
+                "date": parsed["date"]
+            }
+            
+            await update.message.reply_text(
+                f"🎯 *Smart Detection: Add Manual Show*\n\n"
+                f"✅ *Extracted Data:*\n"
+                f"🏛️ Venue: `{parsed['venue_code'].upper()}`\n"
+                f"🆔 Session: `{parsed['session_id']}`\n"
+                f"📅 Date: `{parsed['date']}`\n\n"
+                "Now, enter a reference name for this show (e.g., `Leo - AGS Vivira`):",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return STATE_SHOW_NAME
+            
+        except ValueError as e:
+            await update.message.reply_text(f"⚠️ {e}\n\nPlease paste a valid seat layout URL:")
+            return STATE_SHOW_URL
+
+    # --- BRANCH 2: WATCH LINK ---
+    else:
+        try:
+            parsed = parse_bms_url(url)
+        except Exception as e:
+            await update.message.reply_text(
+                f"❌ *Could not parse URL:* {e}\n\nPlease send a valid BookMyShow event URL:",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return STATE_URL
+
+        context.user_data["watch"] = {
+            "name": parsed["movie_name"],
+            "url": url,
+            "event_code": parsed["event_code"],
+            "region_slug": parsed["region_slug"],
+            "languages": set(),
+            "formats": set(),
+            "theatre": set(),
+            "dates": set(),
+            "time_period": set(),
+        }
+
+        options = Languages.get_all()
+        context.user_data["current_options"] = options
+        context.user_data["current_page"] = 0
+
+        kb = build_multiselect_keyboard(
+            options=options,
+            selected=context.user_data["watch"]["languages"],
+            step_prefix="language",
+            columns=2,
+        )
+
+        await update.message.reply_text(
+            f"🎯 *Smart Detection: Add Watch*\n\n"
+            f"🎬 *Movie:* {parsed['movie_name']}\n"
+            f"📍 *City:* {parsed['region_slug'].title()}\n\n"
+            "📌 *Step 1: Select Languages*\n"
+            "_(Tap to toggle, select 'Any' to match all, then click Next)_",
+            reply_markup=kb,
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return STATE_LANGUAGE
+    
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     log.info(f"User {update.effective_user.id} requested the main menu.")
     await show_main_menu(update, context)
@@ -1447,8 +1548,7 @@ def main():
             CommandHandler("start", start_command, filters=auth_filter),
             CommandHandler("newwatch", start_command, filters=auth_filter),
             CallbackQueryHandler(handle_main_menu, pattern="^menu_(new_watch|new_show)$"),
-            MessageHandler(filters.Regex(r"bookmyshow\.com"), receive_url),
-        ],
+MessageHandler(filters.Regex(r"bookmyshow\.com"), handle_smart_link),        ],
         states={
             STATE_URL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_url)
@@ -1477,15 +1577,13 @@ def main():
                 CallbackQueryHandler(handle_time_toggle_and_save),
             ],
 
+STATE_SHOW_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_url)],
             STATE_SHOW_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_name)],
-    STATE_SHOW_VENUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_venue)],
-    STATE_SHOW_SESSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_session)],
-    STATE_SHOW_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_date)],
-    STATE_SHOW_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_time)],
-    STATE_SHOW_SEAT_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_seat_count)],
-    STATE_SHOW_ADJACENT: [CallbackQueryHandler(receive_show_adjacency, pattern="^show_adj_")],
-    STATE_SHOW_ROWS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_rows)],
-    STATE_SHOW_ROW_SEATS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_row_seats)],
+            STATE_SHOW_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_time)],
+            STATE_SHOW_SEAT_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_seat_count)],
+            STATE_SHOW_ADJACENT: [CallbackQueryHandler(receive_show_adjacency, pattern="^show_adj_")],
+            STATE_SHOW_ROWS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_rows)],
+            STATE_SHOW_ROW_SEATS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_row_seats)],
         },
         fallbacks=[CommandHandler("cancel", cancel_watch,filters=auth_filter),
                    CallbackQueryHandler(handle_main_menu, pattern="^menu_main$") # Allow going back to menu
