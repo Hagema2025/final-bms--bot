@@ -134,8 +134,7 @@ class Formats:
     IMAX_2D = "IMAX 2D"
     IMAX_3D = "IMAX 3D"
     EPIQ = "EPIQ"
-    PXL = "PXL"
-    BIGPIX = "BIGPIX"
+
 
     # Immersive & Motion Seating
     FOUR_DX = "4DX"
