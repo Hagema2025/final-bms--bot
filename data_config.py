@@ -115,3 +115,18 @@ class TimePeriods:
             (cls.EVENING, "🌆 Evening (4 PM - 7 PM)"),
             (cls.NIGHT, "🌃 Night (7 PM - 12 AM)"),
         ]
+
+# ---------------------------------------------------------
+# 6. VENUE CODE TO THEATRE NAME MAP
+# ---------------------------------------------------------
+VENUE_MAP = {
+    "RAKK": "Rakki Cinemas: OMR, Kelambakkam",
+    "INTO": "INOX: The Marina Mall, OMR",
+    "PVPZ": "PVR: Palazzo, Nexus Vijaya Mall",
+    "SPIC": "PVR: Sathyam, Royapettah",
+    "AGSN": "AGS Cinemas OMR: Navlur",
+    "AGSM": "AGS Cinemas: Maduravoyal",
+    "AGSV": "AGS Cinemas: Villivakkam",
+    "MAYA": "MAYAJAAL Multiplex: ECR, Chennai",
+    "BSRM": "Cinepolis: BSR Mall, OMR, Thoraipakkam",
+}
