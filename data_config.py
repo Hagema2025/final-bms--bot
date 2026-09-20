@@ -119,36 +119,38 @@ class Languages:
 # ---------------------------------------------------------
 # 4. PURE FORMATS (No Languages Attached!)
 # ---------------------------------------------------------
+# ---------------------------------------------------------
+# 4. PURE FORMATS (Cleaned, Consolidated & Complete)
+# ---------------------------------------------------------
+# ---------------------------------------------------------
+# 4. PURE FORMATS (Streamlined)
+# ---------------------------------------------------------
 class Formats:
-    # Standard Formats
+    # Standard Visuals
     F_2D = "2D"
     F_3D = "3D"
 
-    # Premium Large Formats (PLF) & Immersion
+    # Premium Large Formats (PLF)
     IMAX_2D = "IMAX 2D"
     IMAX_3D = "IMAX 3D"
     EPIQ = "EPIQ"
+    PXL = "PXL"
+    BIGPIX = "BIGPIX"
+
+    # Immersive & Motion Seating
     FOUR_DX = "4DX"
     FOUR_DX_3D = "4DX 3D"
     SCREENX = "ScreenX"
     ICE = "ICE"
-    PXL = "PXL"
-    BIGPIX = "BIGPIX"
 
-    # Proprietary / Special Screens (SPI / Palazzo)
+    # Proprietary Screens (SPI Cinemas / Palazzo / LUXE)
     MS_INFINITY_VISION = "MS - Infinity Vision"
     MS_INFINITY_VSN_3D = "MS-Infinity Vsn 3d"
-
-    # Premium Projection & Audio
-    F_4K = "4K"
-    F_4K_DOLBY_ATMOS = "4K DOLBY ATMOS"
-    DOLBY_ATMOS = "DOLBY ATMOS"
 
     @classmethod
     def get_all(cls):
         return [v for k, v in vars(cls).items() if not k.startswith("_") and isinstance(v, str)]
-
-# ---------------------------------------------------------
+    # ---------------------------------------------------------
 # 5. TIME PERIODS
 # ---------------------------------------------------------
 class TimePeriods:
