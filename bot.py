@@ -29,7 +29,7 @@ from telegram.ext import (
     filters,
 )
 
-from data_config import Theatres, Languages, Formats, TimePeriods
+from data_config import Theatres, Languages, Formats, TimePeriods,VENUE_MAP
 
 # ======================================================================
 # LOGGING SETUP
@@ -79,13 +79,14 @@ SHOWS_CACHE = None
     STATE_CUSTOM_DATE,
     STATE_TIME,
     STATE_SHOW_URL,
+    STATE_SHOW_THEATRE,  # <--- Added
     STATE_SHOW_NAME,
     STATE_SHOW_TIME,
     STATE_SHOW_SEAT_COUNT,
     STATE_SHOW_ADJACENT,
     STATE_SHOW_ROWS,
 STATE_SHOW_ROW_SEATS
-) = range(14)
+) = range(15)
 
 
 # Parse comma-separated IDs into sets of integers
@@ -249,7 +250,9 @@ def build_shows_view(shows: list, page: int = 0) -> tuple[str, InlineKeyboardMar
     for offset, s in enumerate(page_shows):
         global_idx = start_idx + offset
         display_num = global_idx + 1
-        lines.append(f"*{display_num}.* `{s.get('name')}` | Venue: `{s.get('venue_code')}` | Session: `{s.get('session_id')}`")
+        lines.append(
+    f"*{display_num}.* `{s.get('name')}` | Theatre: `{s.get('theatre', s.get('venue_code'))}` (`{s.get('venue_code')}`) | Session: `{s.get('session_id')}`"
+)        
         keyboard.append([
             InlineKeyboardButton(f"❌ Remove {display_num}", callback_data=f"delshow_{global_idx}")
         ])
@@ -452,19 +455,48 @@ async def receive_show_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = (update.message.text or "").strip()
     try:
         parsed = parse_seat_layout_url(url)
-        context.user_data["show"]["venue_code"] = parsed["venue_code"].upper()
+        v_code = parsed["venue_code"].upper()
+        theatre_name = VENUE_MAP.get(v_code)
+
+        context.user_data["show"]["venue_code"] = v_code
+        context.user_data["show"]["theatre"] = theatre_name or ""
         context.user_data["show"]["session_id"] = parsed["session_id"]
         context.user_data["show"]["date"] = parsed["date"]
+
+        if theatre_name:
+            await update.message.reply_text(
+                f"✅ *Extracted Data:*\n"
+                f"🏛️ Theatre: `{theatre_name}` (`{v_code}`)\n"
+                f"🆔 Session: `{parsed['session_id']}`\n"
+                f"📅 Date: `{parsed['date']}`\n\n"
+                "Now, enter a reference name for this show (e.g., `Leo - AGS Vivira`)\n"
+                "_(or type /cancel to stop)_:",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return STATE_SHOW_NAME
+        else:
+            await update.message.reply_text(
+                f"✅ *Extracted Data:*\n"
+                f"🏛️ Venue Code: `{v_code}`\n"
+                f"🆔 Session: `{parsed['session_id']}`\n"
+                f"📅 Date: `{parsed['date']}`\n\n"
+                f"Please enter the *Theatre Name* for venue `{v_code}`:\n"
+                "_(or type /cancel to stop)_:",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return STATE_SHOW_THEATRE
+        
     except ValueError as e:
         await update.message.reply_text(f"⚠️ {e}\n\nPlease paste a valid seat layout URL:")
         return STATE_SHOW_URL
 
+
+async def receive_show_theatre(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for when venue code is not recognized in VENUE_MAP."""
+    context.user_data["show"]["theatre"] = update.message.text.strip()
     await update.message.reply_text(
-        f"✅ *Extracted Data:*\n"
-        f"🏛️ Venue: `{parsed['venue_code'].upper()}`\n"
-        f"🆔 Session: `{parsed['session_id']}`\n"
-        f"📅 Date: `{parsed['date']}`\n\n"
-        "Now, enter a reference name for this show (e.g., `Leo - AGS Vivira`):",
+        "Now, enter a reference name for this show (e.g., `Leo - AGS Vivira`)\n"
+        "_(or type /cancel to stop)_:",
         parse_mode=ParseMode.MARKDOWN
     )
     return STATE_SHOW_NAME
@@ -472,14 +504,14 @@ async def receive_show_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receive_show_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["show"]["name"] = update.message.text.strip()
     # Skip the venue/session/date states and go directly to time
-    await update.message.reply_text("Enter Show Time for user clarity (e.g., `10:00 AM`):", parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("Enter Show Time for user clarity (e.g., `10:00 AM`)\n" "_(or type /cancel to stop)_:", parse_mode=ParseMode.MARKDOWN)
     return STATE_SHOW_TIME
 
 
 
 async def receive_show_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["show"]["show_time"] = update.message.text.strip()
-    await update.message.reply_text("How many seats do you need? (e.g., `2` or `4`):", parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("How many seats do you need? (e.g., `2` or `4`)\n""_(or type /cancel to stop)_:", parse_mode=ParseMode.MARKDOWN)
     return STATE_SHOW_SEAT_COUNT
 
 async def receive_show_seat_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -498,7 +530,7 @@ async def receive_show_seat_count(update: Update, context: ContextTypes.DEFAULT_
         ]
     ]
     await update.message.reply_text(
-        "👥 *Adjacency Requirement*\n\nDo you require strictly adjacent/consecutive seats?",
+        "👥 *Adjacency Requirement*\n\nDo you require strictly adjacent/consecutive seats?\n""_(or type /cancel to stop)_:",
         reply_markup=InlineKeyboardMarkup(kb),
         parse_mode=ParseMode.MARKDOWN
     )
@@ -510,7 +542,7 @@ async def receive_show_adjacency(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data["show"]["require_adjacent"] = (query.data == "show_adj_yes")
 
     await query.edit_message_text(
-        "🔤 *Preferred Rows*\n\nEnter preferred rows separated by commas (e.g., `H,I,J`) or type `ALL`:",
+        "🔤 *Preferred Rows*\n\nEnter preferred rows separated by commas (e.g., `H,I,J`) or type `ALL`\n""_(or type /cancel to stop)_:",
         parse_mode=ParseMode.MARKDOWN
     )
     return STATE_SHOW_ROWS
@@ -535,7 +567,8 @@ async def receive_show_rows(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `1-30`\n"
         "• `1-30 except 15, 16`\n"
         "• `1-30 ! 10-20`\n"
-        "Or type `ANY` if you don't care about specific seats in this row:",
+        "Or type `ANY` if you don't care about specific seats in this row\n"
+        "_(or type /cancel to stop)_:",
         parse_mode=ParseMode.MARKDOWN
     )
     return STATE_SHOW_ROW_SEATS
@@ -553,8 +586,15 @@ async def receive_row_seats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if pending_rows:
         next_row = pending_rows[0]
         await update.message.reply_text(
-            f"🔢 *Preferred Seats for Row {next_row}*\n\n"
-            "Enter seats using commas, ranges, or exclusions (e.g. `1-30 except 15,16`) or type `ANY`:",
+              f"🔢 *Preferred Seats for Row {next_row}*\n\n"
+                    "Enter seats using commas, ranges, or exclusions.\n"
+                    "Examples:\n"
+                    "• `1, 2, 3`\n"
+                    "• `1-30`\n"
+                    "• `1-30 except 15, 16`\n"
+                    "• `1-30 ! 10-20`\n"
+                    "Or type `ANY` if you don't care about specific seats in this row\n"
+                    "_(or type /cancel to stop)_:",
             parse_mode=ParseMode.MARKDOWN
         )
         return STATE_SHOW_ROW_SEATS
@@ -566,35 +606,38 @@ async def finalize_manual_show(update: Update, context: ContextTypes.DEFAULT_TYP
 
     raw_date = show_entry.get("date", "")
     try:
-      formatted_date = datetime.strptime(raw_date, "%Y%m%d").strftime("%d%m%y")
+        formatted_date = datetime.strptime(raw_date, "%Y%m%d").strftime("%d%m%y")
     except ValueError:
-      formatted_date = raw_date
+        formatted_date = raw_date
     
+    theatre_display = show_entry.get("theatre") or show_entry.get("venue_code", "Venue")
+
     thread_id = None
     if GROUP_CHAT_ID_SHOWS:
         try:
             esc = lambda text: escape_markdown(str(text), version=2)
-            topic_name = f"{show_entry.get('name', 'Show')}_{show_entry.get('venue_code', 'Venue')}_{formatted_date}|{show_entry.get('show_time', 'Time')}"[:128]
+            topic_name = f"{show_entry.get('name', 'Show')}_{theatre_display}_{formatted_date}|{show_entry.get('show_time', 'Time')}"[:128]
             topic = await context.bot.create_forum_topic(chat_id=GROUP_CHAT_ID_SHOWS, name=topic_name)
             thread_id = topic.message_thread_id
             
             if show_entry["row_preferences"]:
-                prefs_summary = ", ".join([f"Row {r}: {s}" if s else f"Row {r}: ANY" for r, s in show_entry["row_preferences"].items()])
+                rows_list = [f"Row {r}: {s if s else 'ANY'}" for r, s in show_entry["row_preferences"].items()]
+                prefs_summary_text = "\n" + "\n".join([f"  • {esc(rs)}" for rs in rows_list])
             else:
-                prefs_summary = "ALL ROWS / ANY SEATS"
+                prefs_summary_text = " " + esc("ALL ROWS / ANY SEATS")
 
             adj_text = "Yes (Strictly Adjacent)" if show_entry.get("require_adjacent", True) else "No (Distributed OK)"
 
             summary = (
                 "🎉 *Manual Show Configuration Summary*\n\n"
-                f"🎬 *Name:* {esc(show_entry['name'])}\n"
-                f"🏛️ *Venue Code:* {esc(show_entry['venue_code'])}\n"
+                f"🎬 *Show Name:* {esc(show_entry['name'])}\n"
+                f"🏛️ *Theatre:* {esc(theatre_display)} \\({esc(show_entry['venue_code'])}\\)\n"
                 f"🆔 *Session ID:* {esc(show_entry['session_id'])}\n"
                 f"📅 *Date:* {esc(show_entry['date'])}\n"
                 f"⏰ *Time:* {esc(show_entry['show_time'])}\n"
                 f"💺 *Seats Required:* {esc(show_entry['seat_count'])}\n"
                 f"👥 *Strict Adjacent:* {esc(adj_text)}\n"
-                f"📍 *Row Preferences:* {esc(prefs_summary)}\n\n"
+                f"📍 *Row Preferences:*{prefs_summary_text}\n\n"
                 "🔔 _Automated alerts for this manual show will appear in this topic\\._"
             )
             topic_msg = await context.bot.send_message(
@@ -613,14 +656,13 @@ async def finalize_manual_show(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text(
         f"✅ *Manual Show Added Successfully!*\n\n"
         f"Name: `{show_entry['name']}`\n"
-        f"Venue: `{show_entry['venue_code']}`\n"
+        f"Theatre: `{theatre_display}` (`{show_entry['venue_code']}`)\n"
         f"Session ID: `{show_entry['session_id']}`\n"
         f"A dedicated topic has been created in the group.",
         parse_mode=ParseMode.MARKDOWN
     )
     context.user_data.clear()
     return ConversationHandler.END
-
 
     
 def parse_bms_url(url: str) -> dict:
@@ -771,22 +813,41 @@ async def handle_smart_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "seat-layout" in url:
         try:
             parsed = parse_seat_layout_url(url)
+            v_code = parsed["venue_code"].upper()
+            theatre_name = VENUE_MAP.get(v_code)
             context.user_data["show"] = {
-                "venue_code": parsed["venue_code"].upper(),
+                "venue_code": v_code,
+                "theatre": theatre_name or "",
                 "session_id": parsed["session_id"],
                 "date": parsed["date"]
             }
             
-            await update.message.reply_text(
-                f"🎯 *Smart Detection: Add Manual Show*\n\n"
-                f"✅ *Extracted Data:*\n"
-                f"🏛️ Venue: `{parsed['venue_code'].upper()}`\n"
-                f"🆔 Session: `{parsed['session_id']}`\n"
-                f"📅 Date: `{parsed['date']}`\n\n"
-                "Now, enter a reference name for this show (e.g., `Leo - AGS Vivira`):",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return STATE_SHOW_NAME
+            # If theatre is recognized in VENUE_MAP, proceed to Show Name
+            if theatre_name:
+                await update.message.reply_text(
+                    f"🎯 *Smart Detection: Add Manual Show*\n\n"
+                    f"✅ *Extracted Data:*\n"
+                    f"🏛️ Theatre: `{theatre_name}` (`{v_code}`)\n"
+                    f"🆔 Session: `{parsed['session_id']}`\n"
+                    f"📅 Date: `{parsed['date']}`\n\n"
+                    "Now, enter a reference name for this show (e.g., `Leo - AGS Vivira`)\n"
+                    "_(or type /cancel to stop)_:",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                return STATE_SHOW_NAME
+            else:
+                # If code is not recognized, ask for Theatre Name
+                await update.message.reply_text(
+                    f"🎯 *Smart Detection: Add Manual Show*\n\n"
+                    f"✅ *Extracted Data:*\n"
+                    f"🏛️ Venue Code: `{v_code}`\n"
+                    f"🆔 Session: `{parsed['session_id']}`\n"
+                    f"📅 Date: `{parsed['date']}`\n\n"
+                    f"Please enter the *Theatre Name* for venue `{v_code}` (e.g., `Rakki Cinemas`)\n"
+                    "_(or type /cancel to stop)_:",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                return STATE_SHOW_THEATRE
             
         except ValueError as e:
             await update.message.reply_text(f"⚠️ {e}\n\nPlease paste a valid seat layout URL:")
@@ -1202,25 +1263,29 @@ async def handle_time_toggle_and_save(update: Update, context: ContextTypes.DEFA
         log.info("Saving watch entry to file and creating group topic...")
         watch_name = watch["name"] + "_" + current_time_str
         
-        # 1. Prepare raw variables for the summary
-        raw_langs = ", ".join(sorted(list(watch["languages"]))) or "ALL"
-        raw_formats = ", ".join(sorted(list(watch["formats"]))) or "ALL"
-        raw_dates = ", ".join(sorted(list(watch["dates"])))
-        raw_times = ", ".join(sorted(list(watch["time_period"]))) or "ALL"
-        theatre_count = len(watch["theatre"])
-        raw_theatres = f"{theatre_count} selected" if theatre_count > 0 else "ALL"
-
-        # 2. Escape variables for MARKDOWN_V2
+        # 1. Escape function for MARKDOWN_V2
         esc = lambda text: escape_markdown(str(text), version=2)
+        
+        # 2. Prepare detailed, escaped variables for the summary
+        raw_langs = esc(", ".join(sorted(list(watch["languages"]))) if watch["languages"] else "ALL")
+        raw_formats = esc(", ".join(sorted(list(watch["formats"]))) if watch["formats"] else "ALL")
+        raw_dates = esc(", ".join(sorted(list(watch["dates"]))) if watch["dates"] else "ALL")
+        raw_times = esc(", ".join(sorted(list(watch["time_period"]))) if watch["time_period"] else "ALL")
+        
+        # Build detailed theatre bullet list
+        if watch["theatre"]:
+            theatre_list_str = "\n" + "\n".join([f"  • {esc(t)}" for t in sorted(list(watch["theatre"]))])
+        else:
+            theatre_list_str = " " + esc("ALL")
 
         summary = (
             "🎉 *Watch Configuration Summary*\n\n"
             f"🎬 *Movie:* {esc(watch_name)}\n"
-            f"🌐 *Languages:* {esc(raw_langs)}\n"
-            f"📦 *Formats:* {esc(raw_formats)}\n"
-            f"🏛️ *Theatres:* {esc(raw_theatres)}\n"
-            f"📅 *Dates:* {esc(raw_dates)}\n"
-            f"⏰ *Times:* {esc(raw_times)}\n\n"
+            f"🌐 *Languages:* {raw_langs}\n"
+            f"📦 *Formats:* {raw_formats}\n"
+            f"📅 *Dates:* {raw_dates}\n"
+            f"⏰ *Times:* {raw_times}\n"
+            f"🏛️ *Theatres:*{theatre_list_str}\n\n"
             "🔔 _Automated alerts for this watch will appear in this topic\\._"
         )
 
@@ -1579,6 +1644,7 @@ MessageHandler(filters.Regex(r"bookmyshow\.com"), handle_smart_link),        ],
 
 STATE_SHOW_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_url)],
             STATE_SHOW_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_name)],
+            STATE_SHOW_THEATRE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_theatre)], # <--- Added
             STATE_SHOW_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_time)],
             STATE_SHOW_SEAT_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_seat_count)],
             STATE_SHOW_ADJACENT: [CallbackQueryHandler(receive_show_adjacency, pattern="^show_adj_")],
