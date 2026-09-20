@@ -873,7 +873,8 @@ async def handle_smart_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "formats": set(),
             "theatre": set(),
             "dates": set(),
-            "time_period": set(),
+            "date_time_map": {},    # <--- Added for advanced dates
+            "current_times": set(), # <--- Temp storage for the active date
         }
 
         options = Languages.get_all()
@@ -927,7 +928,8 @@ async def receive_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "formats": set(),
         "theatre": set(),
         "dates": set(),
-        "time_period": set(),
+        "date_time_map": {},    # <--- Added for advanced dates
+        "current_times": set(), # <--- Temp storage for the active date
     }
 
     options = Languages.get_all()
@@ -1160,23 +1162,38 @@ async def handle_date_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await query.answer("⚠️ Please select at least one date!", show_alert=True)
             return STATE_DATE
 
+        # 1. Prepare the Date Loop
+        context.user_data["sorted_dates"] = sorted(list(watch["dates"]))
+        context.user_data["current_date_idx"] = 0
+        watch["date_time_map"] = {}
+        watch["current_times"] = set()
+
         time_options = TimePeriods.get_all()
         context.user_data["current_options"] = time_options
         context.user_data["current_page"] = 0
+
+        # 2. Get the first date to display
+        first_date = context.user_data["sorted_dates"][0]
+        try:
+            formatted_date = datetime.strptime(first_date, "%Y%m%d").strftime("%d %b %Y")
+        except:
+            formatted_date = first_date
+
         kb = build_multiselect_keyboard(
             options=time_options,
-            selected=watch["time_period"],
+            selected=watch["current_times"],
             step_prefix="time",
             columns=1,
         )
         await query.edit_message_text(
             f"🎬 *{watch['name']}*\n\n"
-            "📌 *Step 5: Select Preferred Show Times*",
+            f"📌 *Step 5: Select Show Times for {formatted_date}*\n"
+            "_(Select 'Any / All' to track all day)_",
             reply_markup=kb,
             parse_mode=ParseMode.MARKDOWN,
         )
         return STATE_TIME
-
+    
     if data == "back_date":
         city_slug = watch["region_slug"]
         city_theatres = Theatres.get_by_city(city_slug) or Theatres.get_all()
@@ -1247,134 +1264,174 @@ async def receive_custom_date(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     return STATE_DATE
 
+async def finalize_watch_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Helper function to save the watch once all dates have times selected."""
+    query = update.callback_query
+    watch = context.user_data["watch"]
+    
+    IST = timezone(timedelta(hours=5, minutes=30))
+    current_time_str = datetime.now(IST).strftime("%Y%m%d%H%M%S")
+    watch_name = watch["name"] + "_" + current_time_str
+
+    esc = lambda text: escape_markdown(str(text), version=2)
+
+    raw_langs = esc(", ".join(sorted(list(watch["languages"]))) if watch["languages"] else "ALL")
+    raw_formats = esc(", ".join(sorted(list(watch["formats"]))) if watch["formats"] else "ALL")
+
+    # Build advanced Date/Time summary
+    dt_lines = []
+    for d_code, t_list in watch["date_time_map"].items():
+        try:
+            pretty_date = datetime.strptime(d_code, "%Y%m%d").strftime("%d %b")
+        except:
+            pretty_date = d_code
+        t_str = ", ".join(t_list).title() if t_list else "All Times"
+        dt_lines.append(f"  • {esc(pretty_date)}: {esc(t_str)}")
+    dt_summary = "\n" + "\n".join(dt_lines)
+
+    if watch["theatre"]:
+        theatre_list_str = "\n" + "\n".join([f"  • {esc(t)}" for t in sorted(list(watch["theatre"]))])
+    else:
+        theatre_list_str = " " + esc("ALL")
+
+    summary = (
+        "🎉 *Watch Configuration Summary*\n\n"
+        f"🎬 *Movie:* {esc(watch_name)}\n"
+        f"🌐 *Languages:* {raw_langs}\n"
+        f"📦 *Formats:* {raw_formats}\n"
+        f"📅 *Dates & Times:*{dt_summary}\n"
+        f"🏛️ *Theatres:*{theatre_list_str}\n\n"
+        "🔔 _Automated alerts for this watch will appear in this topic\\._"
+    )
+
+    thread_id = None
+    if GROUP_CHAT_ID_WATCHES:
+        try:
+            topic = await context.bot.create_forum_topic(chat_id=GROUP_CHAT_ID_WATCHES, name=watch_name[:128])
+            thread_id = topic.message_thread_id
+            
+            topic_msg = await context.bot.send_message(
+                chat_id=GROUP_CHAT_ID_WATCHES, message_thread_id=thread_id,
+                text=summary, parse_mode=ParseMode.MARKDOWN_V2
+            )
+            await context.bot.pin_chat_message(chat_id=GROUP_CHAT_ID_WATCHES, message_id=topic_msg.message_id)
+        except Exception as e:
+            log.error(f"Failed to create topic or pin message: {e}")
+
+    # Pass the dictionary directly to the 'dates' field for main.py to read
+    new_watch_entry = {
+        "name": watch_name,
+        "url": watch["url"],
+        "dates": watch["date_time_map"], 
+        "theatre": sorted(list(watch["theatre"])),
+        "time_period": [], 
+        "discover_variants": True,
+        "languages": sorted(list(watch["languages"])),
+        "formats": sorted(list(watch["formats"])),
+        "message_thread_id": thread_id, 
+    }
+
+    append_to_watches_file(new_watch_entry)
+
+    dm_confirmation = summary + f"\n\n✅ *Setup Complete\\!* A dedicated topic has been created in the group\\."
+    await query.edit_message_text(dm_confirmation, parse_mode=ParseMode.MARKDOWN_V2)
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
 async def handle_time_toggle_and_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
-    log.info(f"STATE_TIME callback data received: {data}")
     watch = context.user_data["watch"]
     options = context.user_data["current_options"]
+    
+    sorted_dates = context.user_data.get("sorted_dates", [])
+    current_idx = context.user_data.get("current_date_idx", 0)
 
-    # Define Indian Standard Time (IST: UTC+5:30)
-    IST = timezone(timedelta(hours=5, minutes=30))
-    current_time_str = datetime.now(IST).strftime("%Y%m%d%H%M%S")
-
-    if data in ("save_watch", "next_time"):
-        log.info("Saving watch entry to file and creating group topic...")
-        watch_name = watch["name"] + "_" + current_time_str
-        
-        # 1. Escape function for MARKDOWN_V2
-        esc = lambda text: escape_markdown(str(text), version=2)
-        
-        # 2. Prepare detailed, escaped variables for the summary
-        raw_langs = esc(", ".join(sorted(list(watch["languages"]))) if watch["languages"] else "ALL")
-        raw_formats = esc(", ".join(sorted(list(watch["formats"]))) if watch["formats"] else "ALL")
-        raw_dates = esc(", ".join(sorted(list(watch["dates"]))) if watch["dates"] else "ALL")
-        raw_times = esc(", ".join(sorted(list(watch["time_period"]))) if watch["time_period"] else "ALL")
-        
-        # Build detailed theatre bullet list
-        if watch["theatre"]:
-            theatre_list_str = "\n" + "\n".join([f"  • {esc(t)}" for t in sorted(list(watch["theatre"]))])
-        else:
-            theatre_list_str = " " + esc("ALL")
-
-        summary = (
-            "🎉 *Watch Configuration Summary*\n\n"
-            f"🎬 *Movie:* {esc(watch_name)}\n"
-            f"🌐 *Languages:* {raw_langs}\n"
-            f"📦 *Formats:* {raw_formats}\n"
-            f"📅 *Dates:* {raw_dates}\n"
-            f"⏰ *Times:* {raw_times}\n"
-            f"🏛️ *Theatres:*{theatre_list_str}\n\n"
-            "🔔 _Automated alerts for this watch will appear in this topic\\._"
-        )
-
-        # 3. Create a Forum Topic, send the summary, and pin it
-        thread_id = None
-        if GROUP_CHAT_ID_WATCHES:
-            try:
-                # Create the topic
-                topic = await context.bot.create_forum_topic(
-                    chat_id=GROUP_CHAT_ID_WATCHES, 
-                    name=watch_name[:128] # Telegram limits topic names to 128 chars
-                )
-                thread_id = topic.message_thread_id
-                
-                # Send the summary directly into the new topic
-                topic_msg = await context.bot.send_message(
-                    chat_id=GROUP_CHAT_ID_WATCHES,
-                    message_thread_id=thread_id,
-                    text=summary,
-                    parse_mode=ParseMode.MARKDOWN_V2
-                )
-                
-                # Pin the summary message inside the topic
-                await context.bot.pin_chat_message(
-                    chat_id=GROUP_CHAT_ID_WATCHES,
-                    message_id=topic_msg.message_id
-                )
-            except Exception as e:
-                log.error(f"Failed to create topic or pin message: {e}")
-
-        # 4. Save to GitHub with the thread_id
-        new_watch_entry = {
-            "name": watch_name,
-            "url": watch["url"],
-            "dates": sorted(list(watch["dates"])),
-            "theatre": sorted(list(watch["theatre"])),
-            "time_period": sorted(list(watch["time_period"])),
-            "discover_variants": True,
-            "languages": sorted(list(watch["languages"])),
-            "formats": sorted(list(watch["formats"])),
-            "message_thread_id": thread_id, 
-        }
-
-        append_to_watches_file(new_watch_entry)
-
-        # 5. Confirm to the user in their current chat menu
-        dm_confirmation = summary + f"\n\n✅ *Setup Complete\\!* A dedicated topic has been created in the group\\."
-        await query.edit_message_text(dm_confirmation, parse_mode=ParseMode.MARKDOWN_V2)
-        
-        context.user_data.clear()
+    if not sorted_dates or current_idx >= len(sorted_dates):
         return ConversationHandler.END
 
-    if data == "back_time":
-        date_options = get_next_10_dates()
-        context.user_data["current_options"] = date_options
-        context.user_data["current_page"] = 0
-        kb = build_multiselect_keyboard(
-            date_options, watch["dates"], "date", 2, 
-            allow_custom_date=True, require_selection=True, exclude_any=True
-        )
-        escaped_watch_name = escape_markdown(watch['name'], version=2)
-        await query.edit_message_text(
-            f"🎬 *{escaped_watch_name}*\n\n📌 *Step 4: Select Dates*",
-            reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2
-        )
-        return STATE_DATE
+    current_date_val = sorted_dates[current_idx]
 
+    # --- 1. HANDLE BACK BUTTON ---
+    if data == "back_time":
+        if current_idx > 0:
+            # Go back to the PREVIOUS date's time selection
+            context.user_data["current_date_idx"] -= 1
+            prev_date = sorted_dates[context.user_data["current_date_idx"]]
+            watch["current_times"] = set(watch["date_time_map"].get(prev_date, []))
+            
+            try:
+                formatted_date = datetime.strptime(prev_date, "%Y%m%d").strftime("%d %b %Y")
+            except:
+                formatted_date = prev_date
+
+            kb = build_multiselect_keyboard(options=options, selected=watch["current_times"], step_prefix="time", columns=1)
+            await query.edit_message_text(
+                f"🎬 *{watch['name']}*\n\n📌 *Step 5: Select Show Times for {formatted_date}*",
+                reply_markup=kb, parse_mode=ParseMode.MARKDOWN
+            )
+            return STATE_TIME
+        else:
+            # Go all the way back to the main Dates selection
+            date_options = get_next_10_dates()
+            context.user_data["current_options"] = date_options
+            kb = build_multiselect_keyboard(date_options, watch["dates"], "date", 2, allow_custom_date=True, require_selection=True, exclude_any=True)
+            await query.edit_message_text(
+                f"🎬 *{watch['name']}*\n\n📌 *Step 4: Select Dates*",
+                reply_markup=kb, parse_mode=ParseMode.MARKDOWN
+            )
+            return STATE_DATE
+
+    # --- 2. HANDLE TOGGLES ---
     if data == "tgl_ANY":
-        watch["time_period"].clear()
+        watch["current_times"].clear()
     elif data.startswith("tgl_"):
         idx = int(data.split("_")[1])
-        
-        # Grab the raw option from the list
         raw_option = options[idx]
-        
-        # Extract JUST the string (e.g., "morning") if it's a tuple
         time_key = raw_option[0] if isinstance(raw_option, tuple) else raw_option
         
-        if time_key in watch["time_period"]:
-            watch["time_period"].remove(time_key)
+        if time_key in watch["current_times"]:
+            watch["current_times"].remove(time_key)
         else:
-            watch["time_period"].add(time_key)
+            watch["current_times"].add(time_key)
 
-    kb = build_multiselect_keyboard(
-        options=options,
-        selected=watch["time_period"],
-        step_prefix="time",
-        columns=2,
-    )
+    # --- 3. HANDLE NEXT / FINISH ---
+    if data == "next_time":
+        # Save times for this specific date
+        watch["date_time_map"][current_date_val] = sorted(list(watch["current_times"]))
+        
+        # Advance the loop
+        context.user_data["current_date_idx"] += 1
+        new_idx = context.user_data["current_date_idx"]
+        
+        if new_idx < len(sorted_dates):
+            # Show screen for the NEXT date
+            next_date = sorted_dates[new_idx]
+            watch["current_times"].clear() 
+            
+            try:
+                formatted_date = datetime.strptime(next_date, "%Y%m%d").strftime("%d %b %Y")
+            except:
+                formatted_date = next_date
+
+            kb = build_multiselect_keyboard(options=options, selected=watch["current_times"], step_prefix="time", columns=1)
+            await query.edit_message_text(
+                f"🎬 *{watch['name']}*\n\n"
+                f"📌 *Step 5: Select Show Times for {formatted_date}*\n"
+                "_(Select 'Any / All' to track all day)_",
+                reply_markup=kb,
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return STATE_TIME
+        else:
+            # All dates processed! Finalize the setup.
+            return await finalize_watch_setup(update, context)
+
+    # Redraw keyboard if just a toggle
+    kb = build_multiselect_keyboard(options=options, selected=watch["current_times"], step_prefix="time", columns=1)
     await safe_edit_reply_markup(query, reply_markup=kb)
     return STATE_TIME
 
