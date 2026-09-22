@@ -1527,6 +1527,7 @@ async def handle_watch_actions(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
     # --- 4. CONFIRM STOP ---
+    # --- 4. CONFIRM STOP ---
     elif data.startswith("confirmstop_"):
         idx = int(data.split("_")[1])
         if idx >= len(watches):
@@ -1547,16 +1548,21 @@ async def handle_watch_actions(update: Update, context: ContextTypes.DEFAULT_TYP
         updated_watches = [w for i, w in enumerate(watches) if i != idx]
         save_watches(updated_watches)
 
-        # Clear State Cache
+        # --- ROBUST STATE CLEANUP (Resistant to Renaming) ---
         deleted_count = 0
         try:
-            bms_state, sha = _github_get_file(GITHUB_WSTATE_PATH,True)
+            # Extract the unique timestamp ID (e.g., "1710923012") from the watch name
+            timestamp_match = re.search(r'_(\d{10,})', exact_watch_name)
+            unique_id = timestamp_match.group(1) if timestamp_match else exact_watch_name.split('_')[0]
+
+            bms_state, sha = _github_get_file(GITHUB_WSTATE_PATH, True)
             if bms_state and isinstance(bms_state, dict):
-                keys_to_delete = [k for k in bms_state.keys() if k.lower().startswith(exact_watch_name.lower())]
+                # Delete any state key containing this unique ID or base name
+                keys_to_delete = [k for k in bms_state.keys() if unique_id in str(k)]
                 if keys_to_delete:
                     for k in keys_to_delete:
                         del bms_state[k]
-                    _github_put_file(GITHUB_WSTATE_PATH, bms_state, f"Cleared states for {exact_watch_name}",True)
+                    _github_put_file(GITHUB_WSTATE_PATH, bms_state, f"Cleared states for watch ID {unique_id}", True)
                     deleted_count = len(keys_to_delete)
         except Exception as e:
             log.error(f"Failed to clear bms_state.json: {e}")
@@ -1569,7 +1575,6 @@ async def handle_watch_actions(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=InlineKeyboardMarkup(kb),
             parse_mode=ParseMode.MARKDOWN_V2
         )
-
     # --- 5. NAVIGATE BACK TO LIST ---
     elif data == "back_to_list":
         fresh_watches = load_watches()
