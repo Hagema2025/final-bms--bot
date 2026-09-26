@@ -1667,46 +1667,72 @@ async def handle_show_actions(update: Update, context: ContextTypes.DEFAULT_TYPE
             v_code = str(matched_show.get("venue_code", "")).strip().upper()
             s_id = str(matched_show.get("session_id", "")).strip()
             
-            # --- 1. Properly Close and Delete Topic ---
+            # --- 1. Properly Close Topic ---
             if thread_id and GROUP_CHAT_ID_SHOWS:
                 try:
                     await context.bot.close_forum_topic(chat_id=GROUP_CHAT_ID_SHOWS, message_thread_id=thread_id)
-                    # await context.bot.delete_forum_topic(chat_id=GROUP_CHAT_ID_SHOWS, message_thread_id=thread_id)
                 except Exception as e:
-                    log.error(f"Failed to delete show forum topic: {e}")
+                    log.error(f"Failed to close show forum topic: {e}")
             
             # --- 2. Remove from shows.json ---
             updated_shows = [s for i, s in enumerate(shows) if i != idx]
             save_shows(updated_shows)
             
-            # --- 3. SURGICAL Clean up in state.json ---
+            # --- 3. EXACT Clean up in state.json ---
             deleted_count = 0
             try:
                 s_state, sha = _github_get_file(GITHUB_SSTATE_PATH, False) 
                 if s_state and isinstance(s_state, dict):
-                    # Target ONLY this exact thread's state
-                    exact_state_key = f"{v_code}_{s_id}_{thread_id}"
                     
+                    # 1. Safely handle the thread_id exactly how main.py handles it
+                    raw_thread = matched_show.get("message_thread_id", "")
+                    thread_id_str = str(raw_thread).strip() if raw_thread is not None else ""
+                    
+                    # 2. Build the EXACT key
+                    exact_state_key = f"{v_code}_{s_id}_{thread_id_str}"
+                    
+                    # 3. Strictly delete ONLY this exact key
                     if exact_state_key in s_state:
                         del s_state[exact_state_key]
-                        _github_put_file(GITHUB_SSTATE_PATH, s_state, f"Cleared state for {exact_state_key}", False)
+                        _github_put_file(GITHUB_SSTATE_PATH, s_state, f"Cleared exact state for {exact_state_key}", False)
                         deleted_count = 1
                     else:
-                        log.warning(f"State key {exact_state_key} not found.")
+                        log.warning(f"Exact state key '{exact_state_key}' not found in state.json.")
             except Exception as e:
                 log.error(f"Failed to clear shows state.json: {e}")
                 
-            text, reply_markup = build_shows_view(load_shows(), page=0)
-            kb_list = list(reply_markup.inline_keyboard) if reply_markup and reply_markup.inline_keyboard else []
-            kb_list.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")])
-            
-            await query.edit_message_text(
-                f"✅ *Manual show successfully removed!*\n"
-                f"🗑️ Topic deleted.\n"
-                f"🧹 Cleared `{deleted_count}` state record.", 
-                reply_markup=InlineKeyboardMarkup(kb_list), 
-                parse_mode=ParseMode.MARKDOWN
-            )# ======================================================================
+            # --- 4. SMART UI RESPONSE (Group vs Private DM) ---
+            # --- 4. SMART UI RESPONSE (Group vs Private DM) ---
+            # --- 4. SMART UI RESPONSE (Group vs Private DM) ---
+            if query.message.chat.type in ["group", "supergroup"]:
+                # Grab the original message text
+                original_text = query.message.text or "⏰ Showtime Reached!"
+                
+                # Append the closed status to the original text
+                updated_text = f"{original_text}\n\n🔒 *As per your request, tracker closed.*"
+                
+                # Create a "dead" inline button just for the UI design
+                disabled_kb = [[InlineKeyboardButton("🔒 Tracker Closed", callback_data="noop")]]
+                
+                await query.edit_message_text(
+                    text=updated_text,
+                    reply_markup=InlineKeyboardMarkup(disabled_kb),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                # If clicked in the bot's private DM, render the full list and main menu button
+                text, reply_markup = build_shows_view(load_shows(), page=0)
+                kb_list = list(reply_markup.inline_keyboard) if reply_markup and reply_markup.inline_keyboard else []
+                kb_list.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")])
+                
+                await query.edit_message_text(
+                    f"✅ *Manual show successfully removed!*\n"
+                    f"🔒 Topic closed.\n"
+                    f"🧹 Cleared `{deleted_count}` state record.", 
+                    reply_markup=InlineKeyboardMarkup(kb_list), 
+                    parse_mode=ParseMode.MARKDOWN
+                )
+# ======================================================================
 # BOT RUNNER
 # ======================================================================
 auth_filter = filters.User(user_id=list(ALLOWED_USERS)) if ALLOWED_USERS else filters.ALL
