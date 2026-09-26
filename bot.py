@@ -661,6 +661,13 @@ async def finalize_manual_show(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"📍 *Row Preferences:*{prefs_summary_text}\n\n"
                 "🔔 _Automated alerts for this manual show will appear in this topic\\._"
             )
+            # --- NEW: Send a tiny buffer message first ---
+            await context.bot.send_message(
+                chat_id=GROUP_CHAT_ID_SHOWS, 
+                message_thread_id=thread_id, 
+                text="🚀 _Initializing tracker..._", 
+                parse_mode=ParseMode.MARKDOWN
+            )
             topic_msg = await context.bot.send_message(
                 chat_id=GROUP_CHAT_ID_SHOWS, message_thread_id=thread_id, text=summary, parse_mode=ParseMode.MARKDOWN_V2,link_preview_options=LinkPreviewOptions(is_disabled=True)  # <--- ADD THIS
             )
@@ -1343,6 +1350,14 @@ async def finalize_watch_setup(update: Update, context: ContextTypes.DEFAULT_TYP
             chat_id = int(GROUP_CHAT_ID_WATCHES)
             topic = await context.bot.create_forum_topic(chat_id=GROUP_CHAT_ID_WATCHES, name=watch_name[:128])
             thread_id = topic.message_thread_id
+
+            # --- NEW: Send a tiny buffer message first ---
+            await context.bot.send_message(
+                chat_id=chat_id, 
+                message_thread_id=thread_id, 
+                text="🚀 _Initializing tracker..._", 
+                parse_mode=ParseMode.MARKDOWN
+            )
             
             topic_msg = await context.bot.send_message(
                 chat_id=GROUP_CHAT_ID_WATCHES, message_thread_id=thread_id,
