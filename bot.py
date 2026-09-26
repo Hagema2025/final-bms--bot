@@ -1337,7 +1337,7 @@ async def finalize_watch_setup(update: Update, context: ContextTypes.DEFAULT_TYP
         theatre_list_str = " " + esc("ALL")
 
     # --- NEW HYPERLINK LOGIC FOR WATCHES ---
-    safe_watch_name = esc(watch_name)
+    safe_watch_name = esc(watch["name"])
     watch_url = watch.get("url", "")
     
     # Create the MarkdownV2 hyperlink: [Movie Name_123456789](https://...)
