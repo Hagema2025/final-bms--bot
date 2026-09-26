@@ -526,15 +526,79 @@ async def receive_show_theatre(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def receive_show_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["show"]["name"] = update.message.text.strip()
-    # Skip the venue/session/date states and go directly to time
-    await update.message.reply_text("Enter Show Time for user clarity (e.g., `10:00 AM`)\n" "_(or type /cancel to stop)_:", parse_mode=ParseMode.MARKDOWN)
+    
+    # Detailed instruction text for the Smart Time Validator
+    instructions = (
+        "⏰ *Enter Show Time*\n\n"
+        "Please provide the showtime. Our smart validator accepts several formats:\n\n"
+        "✅ *Valid Examples:*\n"
+        "• `10:30 AM`  (Standard)\n"
+        "• `02:15 PM`  (Standard)\n"
+        "• `10 AM`     (No minutes)\n"
+        "• `22:30`     (24-hour format)\n"
+        "• `14`        (24-hour hour-only)\n\n"
+        "_(or type /cancel to stop)_:"
+    )
+    
+    await update.message.reply_text(instructions, parse_mode=ParseMode.MARKDOWN)
     return STATE_SHOW_TIME
 
 
 
 async def receive_show_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["show"]["show_time"] = update.message.text.strip()
-    await update.message.reply_text("How many seats do you need? (e.g., `2` or `4`)\n""_(or type /cancel to stop)_:", parse_mode=ParseMode.MARKDOWN)
+    raw_time = update.message.text.strip()
+    
+    # --- STRICT TIME VALIDATOR ---
+    parsed_time = None
+    
+    # Clean up common typos (like replacing dots with colons "10.30" -> "10:30")
+    clean_time = raw_time.replace('.', ':').upper()
+    
+    # List of exact formats we will accept
+    formats_to_try = [
+        "%I:%M %p",  # 10:30 AM
+        "%I:%M%p",   # 10:30AM (no space)
+        "%H:%M",     # 22:30 (military time)
+        "%I %p",     # 10 AM (no minutes)
+        "%I%p",      # 10AM (no minutes, no space)
+        "%H"         # 10 or 22 (just the hour, assumes 24-hour clock)
+    ]
+    
+    for fmt in formats_to_try:
+        try:
+            parsed_time = datetime.strptime(clean_time, fmt).time()
+            break  # Stop looking if we found a match!
+        except ValueError:
+            continue
+            
+    # If the user typed gibberish, reject it and ask again
+    # If the user typed gibberish, reject it and ask again
+    if not parsed_time:
+        await update.message.reply_text(
+            "⚠️ *Invalid time format!*\n\n"
+            "Please try again using one of these supported formats:\n"
+            "• `10:30 AM`  (Standard)\n"
+            "• `02:15 PM`  (Standard)\n"
+            "• `10 AM`     (No minutes)\n"
+            "• `22:30`     (24-hour format)\n"
+            "• `14`        (24-hour hour-only)\n\n"
+            "_(or type /cancel to stop)_:",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return STATE_SHOW_TIME
+        
+    # Standardize the valid time perfectly (e.g., changes "02:15 PM" to "2:15 PM")
+    formatted_time = parsed_time.strftime("%I:%M %p").lstrip('0')
+    
+    # Save the strictly validated time
+    context.user_data["show"]["show_time"] = formatted_time
+    
+    # Move to the next step
+    await update.message.reply_text(
+        "💺 How many seats do you need? (e.g., `2` or `4`)\n"
+        "_(or type /cancel to stop)_:", 
+        parse_mode=ParseMode.MARKDOWN
+    )
     return STATE_SHOW_SEAT_COUNT
 
 async def receive_show_seat_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
