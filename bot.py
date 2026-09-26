@@ -1664,13 +1664,14 @@ async def handle_show_actions(update: Update, context: ContextTypes.DEFAULT_TYPE
         if idx < len(shows):
             matched_show = shows[idx]
             thread_id = matched_show.get("message_thread_id")
+            v_code = str(matched_show.get("venue_code", "")).strip().upper()
+            s_id = str(matched_show.get("session_id", "")).strip()
             
             # --- 1. Properly Close and Delete Topic ---
             if thread_id and GROUP_CHAT_ID_SHOWS:
                 try:
-                    # Closing it first forces the Telegram UI to update immediately
                     await context.bot.close_forum_topic(chat_id=GROUP_CHAT_ID_SHOWS, message_thread_id=thread_id)
-                    await context.bot.delete_forum_topic(chat_id=GROUP_CHAT_ID_SHOWS, message_thread_id=thread_id)
+                    # await context.bot.delete_forum_topic(chat_id=GROUP_CHAT_ID_SHOWS, message_thread_id=thread_id)
                 except Exception as e:
                     log.error(f"Failed to delete show forum topic: {e}")
             
@@ -1678,47 +1679,34 @@ async def handle_show_actions(update: Update, context: ContextTypes.DEFAULT_TYPE
             updated_shows = [s for i, s in enumerate(shows) if i != idx]
             save_shows(updated_shows)
             
-            # --- 3. Clean up state.json ---
-            # --- 3. Clean up state.json ---
+            # --- 3. SURGICAL Clean up in state.json ---
             deleted_count = 0
             try:
-                # isWatch=False tells it to use GITHUB_SSTATE_PATH
                 s_state, sha = _github_get_file(GITHUB_SSTATE_PATH, False) 
                 if s_state and isinstance(s_state, dict):
-                    # Force string, strip spaces, and uppercase for a safe comparison
-                    v_code = str(matched_show.get('venue_code', '')).strip().upper()
-                    s_id = str(matched_show.get('session_id', '')).strip()
+                    # Target ONLY this exact thread's state
+                    exact_state_key = f"{v_code}_{s_id}_{thread_id}"
                     
-                    # Add an underscore to ensure exact session matching (e.g. INTO_90204_)
-                    prefix = f"{v_code}_{s_id}_"
-                    
-                    # Safely find all matching keys
-                    keys_to_delete = [k for k in s_state.keys() if str(k).upper().startswith(prefix)]
-                    
-                    if keys_to_delete:
-                        for k in keys_to_delete:
-                            del s_state[k]
-                            
-                        # Push the cleaned dictionary back to GitHub
-                        _github_put_file(GITHUB_SSTATE_PATH, s_state, f"Cleared state for {prefix}", False)
-                        deleted_count = len(keys_to_delete)
-                        log.info(f"Successfully deleted {deleted_count} state keys for {prefix}")
+                    if exact_state_key in s_state:
+                        del s_state[exact_state_key]
+                        _github_put_file(GITHUB_SSTATE_PATH, s_state, f"Cleared state for {exact_state_key}", False)
+                        deleted_count = 1
                     else:
-                        log.warning(f"No matching state keys found for prefix: {prefix}. Current keys: {list(s_state.keys())}")
+                        log.warning(f"State key {exact_state_key} not found.")
             except Exception as e:
                 log.error(f"Failed to clear shows state.json: {e}")
                 
-        text, reply_markup = build_shows_view(load_shows(), page=0)
-        kb_list = list(reply_markup.inline_keyboard) if reply_markup and reply_markup.inline_keyboard else []
-        kb_list.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")])
-        
-        await query.edit_message_text(
-            f"✅ *Manual show successfully removed!*\n"
-            f"🗑️ Topic deleted.\n"
-            f"🧹 Cleared `{deleted_count}` state record(s).", 
-            reply_markup=InlineKeyboardMarkup(kb_list), 
-            parse_mode=ParseMode.MARKDOWN
-        )# ======================================================================
+            text, reply_markup = build_shows_view(load_shows(), page=0)
+            kb_list = list(reply_markup.inline_keyboard) if reply_markup and reply_markup.inline_keyboard else []
+            kb_list.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")])
+            
+            await query.edit_message_text(
+                f"✅ *Manual show successfully removed!*\n"
+                f"🗑️ Topic deleted.\n"
+                f"🧹 Cleared `{deleted_count}` state record.", 
+                reply_markup=InlineKeyboardMarkup(kb_list), 
+                parse_mode=ParseMode.MARKDOWN
+            )# ======================================================================
 # BOT RUNNER
 # ======================================================================
 auth_filter = filters.User(user_id=list(ALLOWED_USERS)) if ALLOWED_USERS else filters.ALL
