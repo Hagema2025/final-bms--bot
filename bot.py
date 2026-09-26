@@ -16,6 +16,7 @@ from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    LinkPreviewOptions,
 )
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
@@ -653,7 +654,7 @@ async def finalize_manual_show(update: Update, context: ContextTypes.DEFAULT_TYP
                 "🔔 _Automated alerts for this manual show will appear in this topic\\._"
             )
             topic_msg = await context.bot.send_message(
-                chat_id=GROUP_CHAT_ID_SHOWS, message_thread_id=thread_id, text=summary, parse_mode=ParseMode.MARKDOWN_V2
+                chat_id=GROUP_CHAT_ID_SHOWS, message_thread_id=thread_id, text=summary, parse_mode=ParseMode.MARKDOWN_V2,link_preview_options=LinkPreviewOptions(is_disabled=True)  # <--- ADD THIS
             )
             try:
               await context.bot.pin_chat_message(chat_id=GROUP_CHAT_ID_SHOWS, message_id=topic_msg.message_id)
@@ -1340,7 +1341,8 @@ async def finalize_watch_setup(update: Update, context: ContextTypes.DEFAULT_TYP
             
             topic_msg = await context.bot.send_message(
                 chat_id=GROUP_CHAT_ID_WATCHES, message_thread_id=thread_id,
-                text=summary, parse_mode=ParseMode.MARKDOWN_V2
+                text=summary, parse_mode=ParseMode.MARKDOWN_V2,
+                link_preview_options=LinkPreviewOptions(is_disabled=True)  # <--- ADD THIS
             )
             try:
               await context.bot.pin_chat_message(chat_id=chat_id, message_id=topic_msg.message_id)
@@ -1365,7 +1367,7 @@ async def finalize_watch_setup(update: Update, context: ContextTypes.DEFAULT_TYP
     append_to_watches_file(new_watch_entry)
 
     dm_confirmation = summary + f"\n\n✅ *Setup Complete\\!* A dedicated topic has been created in the group\\."
-    await query.edit_message_text(dm_confirmation, parse_mode=ParseMode.MARKDOWN_V2)
+    await query.edit_message_text(dm_confirmation, parse_mode=ParseMode.MARKDOWN_V2,link_preview_options=LinkPreviewOptions(is_disabled=True))  # <--- ADD THIS)
     
     context.user_data.clear()
     return ConversationHandler.END
