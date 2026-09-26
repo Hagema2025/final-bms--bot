@@ -192,15 +192,26 @@ async def is_authorized(update: Update) -> bool:
         return False
     return True
 
-async def background_delayed_pin(bot, chat_id, message_id):
+async def background_delayed_pin(bot, chat_id, message_id,buffer_message_id=None):
     """Waits 3 seconds, then pins the message to bypass Telegram UI caching bugs."""
     await asyncio.sleep(3)
     try:
         await bot.pin_chat_message(chat_id=chat_id, message_id=message_id, disable_notification=False)
+
+        # 2. Delete the buffer message so the chat looks clean
+        if buffer_message_id:
+            await bot.delete_message(chat_id=chat_id, message_id=buffer_message_id)
     except Exception as e:
         log.error(f"Background pin failed: {e}")
 
-
+async def auto_delete_pin_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Listens for 'Bot pinned a message' service messages and instantly deletes them."""
+    if update.message:
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+    
 def build_watches_view(watches: list, page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
     if not watches:
         return "📭 No active watches found.", None
@@ -662,7 +673,8 @@ async def finalize_manual_show(update: Update, context: ContextTypes.DEFAULT_TYP
                 "🔔 _Automated alerts for this manual show will appear in this topic\\._"
             )
             # --- NEW: Send a tiny buffer message first ---
-            await context.bot.send_message(
+            # --- 1. Send Buffer Message ---
+            buffer_msg = await context.bot.send_message(
                 chat_id=GROUP_CHAT_ID_SHOWS, 
                 message_thread_id=thread_id, 
                 text="🚀 _Initializing tracker..._", 
@@ -671,7 +683,7 @@ async def finalize_manual_show(update: Update, context: ContextTypes.DEFAULT_TYP
             topic_msg = await context.bot.send_message(
                 chat_id=GROUP_CHAT_ID_SHOWS, message_thread_id=thread_id, text=summary, parse_mode=ParseMode.MARKDOWN_V2,link_preview_options=LinkPreviewOptions(is_disabled=True)  # <--- ADD THIS
             )
-            asyncio.create_task(background_delayed_pin(context.bot, GROUP_CHAT_ID_SHOWS, topic_msg.message_id))
+            asyncio.create_task(background_delayed_pin(context.bot, GROUP_CHAT_ID_SHOWS, topic_msg.message_id,buffer_msg.message_id))
         except Exception as e:
             log.error(f"Failed to create show forum topic: {e}")
 
@@ -1352,7 +1364,8 @@ async def finalize_watch_setup(update: Update, context: ContextTypes.DEFAULT_TYP
             thread_id = topic.message_thread_id
 
             # --- NEW: Send a tiny buffer message first ---
-            await context.bot.send_message(
+            # --- 1. Send Buffer Message ---
+            buffer_msg = await context.bot.send_message(
                 chat_id=chat_id, 
                 message_thread_id=thread_id, 
                 text="🚀 _Initializing tracker..._", 
@@ -1364,7 +1377,7 @@ async def finalize_watch_setup(update: Update, context: ContextTypes.DEFAULT_TYP
                 text=summary, parse_mode=ParseMode.MARKDOWN_V2,
                 link_preview_options=LinkPreviewOptions(is_disabled=True)  # <--- ADD THIS
             )
-            asyncio.create_task(background_delayed_pin(context.bot, chat_id, topic_msg.message_id))
+            asyncio.create_task(background_delayed_pin(context.bot, chat_id, topic_msg.message_id,buffer_msg.message_id))
         except Exception as e:
             log.error(f"Failed to create topic or pin message: {e}")
 
@@ -1786,6 +1799,10 @@ STATE_SHOW_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_show_ur
 )
 
     app.add_handler(CallbackQueryHandler(handle_show_actions, pattern="^(spage_|delshow_)"))
+    # Add this inside main(), right next to your other app.add_handler lines:
+    app.add_handler(
+        MessageHandler(filters.StatusUpdate.PINNED_MESSAGE, auto_delete_pin_notification)
+    )
     print("🤖 Telegram Watch Builder Bot is running...")
     app.run_polling()
 
