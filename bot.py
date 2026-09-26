@@ -196,7 +196,7 @@ async def background_delayed_pin(bot, chat_id, message_id):
     """Waits 3 seconds, then pins the message to bypass Telegram UI caching bugs."""
     await asyncio.sleep(3)
     try:
-        await bot.pin_chat_message(chat_id=chat_id, message_id=message_id, disable_notification=True)
+        await bot.pin_chat_message(chat_id=chat_id, message_id=message_id, disable_notification=False)
     except Exception as e:
         log.error(f"Background pin failed: {e}")
 
