@@ -1669,7 +1669,8 @@ async def handle_watch_actions(update: Update, context: ContextTypes.DEFAULT_TYP
         thread_id = matched.get("message_thread_id")
         if thread_id and GROUP_CHAT_ID_WATCHES:
             try:
-                await context.bot.delete_forum_topic(chat_id=GROUP_CHAT_ID_WATCHES, message_thread_id=thread_id)
+                await context.bot.close_forum_topic(chat_id=GROUP_CHAT_ID_WATCHES, message_thread_id=thread_id)
+                # await context.bot.delete_forum_topic(chat_id=GROUP_CHAT_ID_WATCHES, message_thread_id=thread_id)
             except Exception as e:
                 log.error(f"Failed to delete forum topic: {e}")
 
@@ -1696,14 +1697,35 @@ async def handle_watch_actions(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception as e:
             log.error(f"Failed to clear bms_state.json: {e}")
 
-        kb = [[InlineKeyboardButton("⬅️ Back to List", callback_data="back_to_list")]]
-        await query.edit_message_text(
-            f"✅ *Successfully stopped watch\\!*\n"
-            f"🗑️ Deleted Topic for: `{escape_markdown(exact_watch_name, version=2)}`\n"
-            f"🧹 Cleared `{deleted_count}` state variant\\(s\\)\\.",
-            reply_markup=InlineKeyboardMarkup(kb),
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
+        if query.message.chat.type in ["group", "supergroup"]:
+            # Grab the original message text (e.g., "Tracker Expired!")
+            original_text = query.message.text or "⏰ Tracker Expired!"
+            
+            # Append the closed status to the original text
+            updated_text = f"{original_text}\n\n🔒 *As per your request, tracker closed.*"
+            
+            # Create a "dead" inline button just for the UI design
+            disabled_kb = [[InlineKeyboardButton("🔒 Tracker Closed", callback_data="noop")]]
+            
+            await query.edit_message_text(
+                text=updated_text,
+                reply_markup=InlineKeyboardMarkup(disabled_kb),
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            # If clicked in the bot's private DM, show success and menu buttons
+            kb = [
+                [InlineKeyboardButton("⬅️ Back to List", callback_data="back_to_list")],
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="menu_main")]
+            ]
+            
+            await query.edit_message_text(
+                f"✅ *Successfully stopped watch\\!*\n"
+                f"🔒 Closed Topic for: `{escape_markdown(exact_watch_name, version=2)}`\n"
+                f"🧹 Cleared `{deleted_count}` state variant\\(s\\)\\.",
+                reply_markup=InlineKeyboardMarkup(kb),
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
     # --- 5. NAVIGATE BACK TO LIST ---
     elif data == "back_to_list":
         fresh_watches = load_watches()
