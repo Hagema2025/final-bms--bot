@@ -433,6 +433,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_authorized(update): return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     
@@ -846,6 +847,7 @@ def append_to_watches_file(watch_entry: dict):
 # CONVERSATION STEP HANDLERS
 # ======================================================================
 async def handle_smart_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_authorized(update): return ConversationHandler.END
     url = (update.message.text or "").strip()
     log.info(f"Smart router received link: {url}")
 
@@ -1752,7 +1754,7 @@ def main():
             CommandHandler("start", start_command, filters=auth_filter),
             CommandHandler("newwatch", start_command, filters=auth_filter),
             CallbackQueryHandler(handle_main_menu, pattern="^menu_(new_watch|new_show)$"),
-MessageHandler(filters.Regex(r"bookmyshow\.com"), handle_smart_link),        ],
+MessageHandler(filters.Regex(r"bookmyshow\.com") & auth_filter, handle_smart_link),  ],
         states={
             STATE_URL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_url)
