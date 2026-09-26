@@ -462,6 +462,8 @@ async def receive_show_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["show"]["theatre"] = theatre_name or ""
         context.user_data["show"]["session_id"] = parsed["session_id"]
         context.user_data["show"]["date"] = parsed["date"]
+        # --- ADD THIS LINE ---
+        context.user_data["show"]["url"] = url
 
         if theatre_name:
             await update.message.reply_text(
@@ -628,9 +630,19 @@ async def finalize_manual_show(update: Update, context: ContextTypes.DEFAULT_TYP
 
             adj_text = "Yes (Strictly Adjacent)" if show_entry.get("require_adjacent", True) else "No (Distributed OK)"
 
+            # --- NEW HYPERLINK LOGIC ---
+            safe_name = esc(show_entry['name'])
+            show_url = show_entry.get('url', '')
+            
+            # Create the MarkdownV2 hyperlink: [Show Name](https://...)
+            if show_url:
+                name_hyperlink = f"[{safe_name}]({show_url})"
+            else:
+                name_hyperlink = safe_name
+
             summary = (
                 "🎉 *Manual Show Configuration Summary*\n\n"
-                f"🎬 *Show Name:* {esc(show_entry['name'])}\n"
+                f"🎬 *Show Name:* {name_hyperlink}\n"
                 f"🏛️ *Theatre:* {esc(theatre_display)} \\({esc(show_entry['venue_code'])}\\)\n"
                 f"🆔 *Session ID:* {esc(show_entry['session_id'])}\n"
                 f"📅 *Date:* {esc(show_entry['date'])}\n"
@@ -643,7 +655,10 @@ async def finalize_manual_show(update: Update, context: ContextTypes.DEFAULT_TYP
             topic_msg = await context.bot.send_message(
                 chat_id=GROUP_CHAT_ID_SHOWS, message_thread_id=thread_id, text=summary, parse_mode=ParseMode.MARKDOWN_V2
             )
-            await context.bot.pin_chat_message(chat_id=GROUP_CHAT_ID_SHOWS, message_id=topic_msg.message_id)
+            try:
+              await context.bot.pin_chat_message(chat_id=GROUP_CHAT_ID_SHOWS, message_id=topic_msg.message_id)
+            except Exception as pin_err:
+                log.error(f"Failed to pin show summary (Check if bot has 'Pin Messages' admin right!): {pin_err}")
         except Exception as e:
             log.error(f"Failed to create show forum topic: {e}")
 
@@ -819,7 +834,9 @@ async def handle_smart_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "venue_code": v_code,
                 "theatre": theatre_name or "",
                 "session_id": parsed["session_id"],
-                "date": parsed["date"]
+                "date": parsed["date"],
+                # --- ADD THIS LINE ---
+                "url": url  
             }
             
             # If theatre is recognized in VENUE_MAP, proceed to Show Name
@@ -1294,9 +1311,19 @@ async def finalize_watch_setup(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         theatre_list_str = " " + esc("ALL")
 
+    # --- NEW HYPERLINK LOGIC FOR WATCHES ---
+    safe_watch_name = esc(watch_name)
+    watch_url = watch.get("url", "")
+    
+    # Create the MarkdownV2 hyperlink: [Movie Name_123456789](https://...)
+    if watch_url:
+        name_hyperlink = f"[{safe_watch_name}]({watch_url})"
+    else:
+        name_hyperlink = safe_watch_name
+
     summary = (
         "🎉 *Watch Configuration Summary*\n\n"
-        f"🎬 *Movie:* {esc(watch_name)}\n"
+        f"🎬 *Movie:* {name_hyperlink}\n"
         f"🌐 *Languages:* {raw_langs}\n"
         f"📦 *Formats:* {raw_formats}\n"
         f"📅 *Dates & Times:*{dt_summary}\n"
@@ -1307,6 +1334,7 @@ async def finalize_watch_setup(update: Update, context: ContextTypes.DEFAULT_TYP
     thread_id = None
     if GROUP_CHAT_ID_WATCHES:
         try:
+            chat_id = int(GROUP_CHAT_ID_WATCHES)
             topic = await context.bot.create_forum_topic(chat_id=GROUP_CHAT_ID_WATCHES, name=watch_name[:128])
             thread_id = topic.message_thread_id
             
@@ -1314,7 +1342,10 @@ async def finalize_watch_setup(update: Update, context: ContextTypes.DEFAULT_TYP
                 chat_id=GROUP_CHAT_ID_WATCHES, message_thread_id=thread_id,
                 text=summary, parse_mode=ParseMode.MARKDOWN_V2
             )
-            await context.bot.pin_chat_message(chat_id=GROUP_CHAT_ID_WATCHES, message_id=topic_msg.message_id)
+            try:
+              await context.bot.pin_chat_message(chat_id=chat_id, message_id=topic_msg.message_id)
+            except Exception as pin_err:
+                log.error(f"Failed to pin watch summary (Check if bot has 'Pin Messages' admin right!): {pin_err}")
         except Exception as e:
             log.error(f"Failed to create topic or pin message: {e}")
 
