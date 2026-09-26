@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 from telegram.helpers import escape_markdown
 load_dotenv()  # Loads variables from your local .env file
-
+import asyncio
 import requests
 from telegram import (
     Update,
@@ -191,6 +191,14 @@ async def is_authorized(update: Update) -> bool:
             
         return False
     return True
+
+async def background_delayed_pin(bot, chat_id, message_id):
+    """Waits 3 seconds, then pins the message to bypass Telegram UI caching bugs."""
+    await asyncio.sleep(3)
+    try:
+        await bot.pin_chat_message(chat_id=chat_id, message_id=message_id, disable_notification=True)
+    except Exception as e:
+        log.error(f"Background pin failed: {e}")
 
 
 def build_watches_view(watches: list, page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
@@ -656,10 +664,7 @@ async def finalize_manual_show(update: Update, context: ContextTypes.DEFAULT_TYP
             topic_msg = await context.bot.send_message(
                 chat_id=GROUP_CHAT_ID_SHOWS, message_thread_id=thread_id, text=summary, parse_mode=ParseMode.MARKDOWN_V2,link_preview_options=LinkPreviewOptions(is_disabled=True)  # <--- ADD THIS
             )
-            try:
-              await context.bot.pin_chat_message(chat_id=GROUP_CHAT_ID_SHOWS, message_id=topic_msg.message_id)
-            except Exception as pin_err:
-                log.error(f"Failed to pin show summary (Check if bot has 'Pin Messages' admin right!): {pin_err}")
+            asyncio.create_task(background_delayed_pin(context.bot, GROUP_CHAT_ID_SHOWS, topic_msg.message_id))
         except Exception as e:
             log.error(f"Failed to create show forum topic: {e}")
 
@@ -1344,10 +1349,7 @@ async def finalize_watch_setup(update: Update, context: ContextTypes.DEFAULT_TYP
                 text=summary, parse_mode=ParseMode.MARKDOWN_V2,
                 link_preview_options=LinkPreviewOptions(is_disabled=True)  # <--- ADD THIS
             )
-            try:
-              await context.bot.pin_chat_message(chat_id=chat_id, message_id=topic_msg.message_id)
-            except Exception as pin_err:
-                log.error(f"Failed to pin watch summary (Check if bot has 'Pin Messages' admin right!): {pin_err}")
+            asyncio.create_task(background_delayed_pin(context.bot, chat_id, topic_msg.message_id))
         except Exception as e:
             log.error(f"Failed to create topic or pin message: {e}")
 
